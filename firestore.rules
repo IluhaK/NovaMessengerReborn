@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function getUserData(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function userExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function isCreator() {
+      return isSignedIn() && (
+        request.auth.token.email == 'iluha1032020@gmail.com' ||
+        (userExists(request.auth.uid) && 
+         (getUserData(request.auth.uid).get('role', 'user') == 'creator' || getUserData(request.auth.uid).get('id', -1) == 1))
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isCreator() ||
+        (userExists(request.auth.uid) && 
+         getUserData(request.auth.uid).get('role', 'user') == 'admin')
+      );
+    }
+
+    function isBanned() {
+      return isSignedIn() && userExists(request.auth.uid) && 
+        getUserData(request.auth.uid).get('isBanned', false) == true;
+    }
+
+    function isMuted() {
+      return isSignedIn() && userExists(request.auth.uid) && 
+        getUserData(request.auth.uid).get('isMuted', false) == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- User Rules ---
+    match /users/{userId} {
+      allow get, list: if true;
+      allow create: if isOwner(userId) && 
+        request.resource.data.keys().hasAll(['uid', 'email', 'id', 'createdAt', 'handle']);
+
+      allow update: if (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'theme', 'language', 'handle', 'twoFactorEnabled', 'twoFactorSecret', 'lastSeen'])) ||
+         (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned', 'banReason', 'banExpires', 'isMuted', 'muteReason', 'muteExpires', 'isVerified', 'verificationCode'])) ||
+         (isCreator() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'isVerified', 'displayName', 'photoURL', 'bio', 'theme', 'language', 'handle', 'twoFactorEnabled', 'twoFactorSecret', 'lastSeen', 'isBanned', 'banReason', 'banExpires', 'isMuted', 'muteReason', 'muteExpires']));
+      allow delete: if isCreator();
+    }
+
+    // --- Report Rules ---
+    match /reports/{reportId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn() && request.resource.data.keys().hasAll(['reporterId', 'targetId', 'reason', 'status', 'createdAt']);
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // --- Chat Rules ---
+    match /chats/{chatId} {
+      // Global chat can be seen by all to allow joining
+      allow get: if isSignedIn() && (chatId == 'global_chat' || request.auth.uid in resource.data.memberIds || isAdmin());
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.memberIds || isAdmin());
+      
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() && (
+        (request.auth.uid in resource.data.memberIds) || isAdmin() ||
+        (chatId == 'global_chat' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds']))
+      ) && request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessage', 'lastMessageAt', 'memberIds', 'name', 'avatarURL']);
+    }
+
+    // --- Message Rules ---
+    match /chats/{chatId}/messages/{messageId} {
+      allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds || isAdmin());
+      
+      allow create: if isSignedIn() && !isBanned() && !isMuted() &&
+        (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds || isAdmin()) &&
+        (request.resource.data.senderId == request.auth.uid || request.resource.data.senderId == 'system');
+
+      allow update: if isSignedIn() && !isBanned() &&
+        resource.data.senderId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt']);
+
+      allow delete: if isSignedIn() && (resource.data.senderId == request.auth.uid || isAdmin());
+    }
+
+    // --- System Config ---
+    match /system/{configId} {
+      allow read: if isSignedIn();
+      allow update: if isCreator() || (isSignedIn() && configId == 'config' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableIds', 'userSequence']));
+      allow create: if isCreator() || (isSignedIn() && configId == 'config');
+      allow delete: if isCreator();
+    }
+  }
+}

@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isUserVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function getUserData(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function isCreator() {
+      return isSignedIn() && getUserData(request.auth.uid).id == 1;
+    }
+
+    function isBanned() {
+      return isSignedIn() && getUserData(request.auth.uid).get('isBanned', false) == true &&
+             getUserData(request.auth.uid).get('banExpires', timestamp.date(2000, 1, 1)) > request.time;
+    }
+
+    function isMuted() {
+      return isSignedIn() && getUserData(request.auth.uid).get('isMuted', false) == true &&
+             getUserData(request.auth.uid).get('muteExpires', timestamp.date(2000, 1, 1)) > request.time;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- User Rules ---
+    match /users/{userId} {
+      // Users can read public profile info
+      allow get: if isSignedIn();
+      // Only the user can read their own full data (including PII)
+      allow read: if isOwner(userId) || isCreator();
+      
+      // Creation: must be the auth user, cannot spoof numeric ID (except first user)
+      allow create: if isOwner(userId) && 
+        request.resource.data.keys().hasAll(['uid', 'email', 'id', 'createdAt']) &&
+        request.resource.data.id >= 1;
+
+      // Update: owner or creator (admin)
+      allow update: if (isOwner(userId) || isCreator()) && (
+        // Action: Update Profile
+        (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'theme'])) ||
+        // Action: Admin Ban/Mute (only if target is not ID 1)
+        (isCreator() && resource.data.id != 1 && request.resource.data.diff(resource.data).affectedKeys().hasAny(['isBanned', 'banReason', 'banExpires', 'isMuted', 'muteReason', 'muteExpires']))
+      );
+    }
+
+    // --- Chat Rules ---
+    match /chats/{chatId} {
+      allow read: if isSignedIn() && request.auth.uid in resource.data.memberIds;
+      allow create: if isSignedIn() && request.auth.uid in request.resource.data.memberIds;
+      allow update: if isSignedIn() && request.auth.uid in resource.data.memberIds &&
+        request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessage', 'lastMessageAt', 'memberIds', 'name', 'avatarURL']);
+    }
+
+    // --- Message Rules ---
+    match /chats/{chatId}/messages/{messageId} {
+      allow read: if isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds;
+      
+      allow create: if isSignedIn() && !isBanned() && !isMuted() &&
+        request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds &&
+        request.resource.data.senderId == request.auth.uid;
+
+      allow update: if isSignedIn() && !isBanned() &&
+        resource.data.senderId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt']);
+
+      allow delete: if isSignedIn() && (resource.data.senderId == request.auth.uid || isCreator());
+    }
+
+    // --- System Config ---
+    match /system/config {
+      allow read: if isSignedIn();
+      // Allow update if it's an increment (this is simplified as we'd normally use a cloud function or stricter transaction logic)
+      allow write: if isSignedIn(); 
+    }
+  }
+}

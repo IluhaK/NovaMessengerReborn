@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information and settings",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "bio": { "type": "string" },
+        "id": { "type": "number", "description": "Numeric sequence ID (1 for creator)" },
+        "theme": { "type": "string", "enum": ["light", "dark", "telegram"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isBanned": { "type": "boolean" },
+        "banReason": { "type": "string" },
+        "banExpires": { "type": "string", "format": "date-time" },
+        "isMuted": { "type": "boolean" },
+        "muteReason": { "type": "string" },
+        "muteExpires": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "id"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Direct message or group chat",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["direct", "group"] },
+        "name": { "type": "string" },
+        "avatarURL": { "type": "string" },
+        "creatorId": { "type": "string" },
+        "memberIds": { "type": "array" },
+        "lastMessage": { "type": "string" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "type", "memberIds"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Chat message",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "editedAt": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["text", "system"] }
+      },
+      "required": ["chatId", "senderId", "text", "createdAt"]
+    },
+    "Config": {
+      "title": "Config",
+      "description": "Global system configuration",
+      "type": "object",
+      "properties": {
+        "lastUserNumericId": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "Collection of user profiles"
+    },
+    "chats": {
+      "schema": "Chat",
+      "description": "Collection of direct and group chats"
+    },
+    "chats/{chatId}/messages": {
+      "schema": "Message",
+      "description": "Messages within a specific chat"
+    },
+    "system/config": {
+      "schema": "Config",
+      "description": "Global system state"
+    }
+  }
+}
