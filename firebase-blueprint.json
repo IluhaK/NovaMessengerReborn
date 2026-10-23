@@ -35,7 +35,10 @@
         "memberIds": { "type": "array" },
         "lastMessage": { "type": "string" },
         "lastMessageAt": { "type": "string", "format": "date-time" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "pinnedMessageId": { "type": "string" },
+        "pinnedMessage": { "type": "object" },
+        "mutedBy": { "type": "array" }
       },
       "required": ["id", "type", "memberIds"]
     },
@@ -51,7 +54,15 @@
         "text": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "editedAt": { "type": "string", "format": "date-time" },
-        "type": { "type": "string", "enum": ["text", "system"] }
+        "type": { "type": "string", "enum": ["text", "system", "voice", "sticker"] },
+        "reactions": { "type": "object" },
+        "replyTo": { "type": "object" },
+        "pinned": { "type": "boolean" },
+        "pinnedAt": { "type": "string", "format": "date-time" },
+        "isForwarded": { "type": "boolean" },
+        "forwardedFrom": { "type": "string" },
+        "voiceDuration": { "type": "number" },
+        "stickerUrl": { "type": "string" }
       },
       "required": ["chatId", "senderId", "text", "createdAt"]
     },

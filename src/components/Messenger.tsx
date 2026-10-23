@@ -45,10 +45,23 @@ import {
   User,
   BadgeCheck,
   UserCog,
+  Pin,
+  Reply,
+  Share2,
+  Mic,
+  MicOff,
+  Play,
+  Pause,
+  Download,
+  SmilePlus,
+  CornerUpLeft,
+  BellOff,
+  Volume2,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { generateSecret, verifySync, generateURI } from "otplib";
 import { Buffer } from "buffer";
+import { ThreeHoloOrb } from "./ThreeHoloOrb";
 
 if (typeof window !== "undefined" && !window.Buffer) {
   window.Buffer = Buffer;
@@ -72,7 +85,8 @@ import {
   getDoc,
   writeBatch,
 } from "firebase/firestore";
-import { Chat, Message, UserProfile, Theme, UserReport } from "../types";
+import { Chat, Message, UserProfile, Theme, UserReport, ModerationLogEntry } from "../types";
+import SpoonParkourGame from "./SpoonParkourGame";
 import { format } from "date-fns";
 
 import { translations, Language } from "../lib/translations";
@@ -99,6 +113,24 @@ const emojis = [
   "⚡",
   "💻",
 ];
+
+const quickReactions = ["👍", "❤️", "🔥", "😂", "😮", "😢", "👏", "🎉", "🚀", "⚡"];
+
+const stickerPack = [
+  { emoji: "🚀", label: "To The Moon" },
+  { emoji: "💎", label: "Telegram Star" },
+  { emoji: "🐸", label: "Pepe Cool" },
+  { emoji: "🔥", label: "Pure Fire" },
+  { emoji: "👑", label: "Supreme Crown" },
+  { emoji: "👾", label: "Cyber Alien" },
+  { emoji: "🐶", label: "Good Doge" },
+  { emoji: "⚡", label: "Electric Flash" },
+  { emoji: "🍕", label: "Pizza Slice" },
+  { emoji: "🪐", label: "Cosmic Realm" },
+  { emoji: "🎉", label: "Party Time" },
+  { emoji: "😎", label: "Super Chad" },
+];
+
 
 const VerificationBadge = ({
   id,
@@ -152,13 +184,73 @@ const isOnline = (lastSeen: any) => {
   }
 };
 
-const formatLastSeen = (lastSeen: any, t: any) => {
-  if (!lastSeen) return t.offline;
+const formatLastSeen = (lastSeen: any, _t?: any) => {
+  if (!lastSeen) return "был(-а) в сети очень давно";
   try {
     const date = lastSeen.toDate ? lastSeen.toDate() : new Date(lastSeen);
-    return `${t.lastSeen} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    if (diffMs < 120000) return "в сети прямо сейчас";
+
+    const timeStr = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+    const isToday =
+      now.getFullYear() === date.getFullYear() &&
+      now.getMonth() === date.getMonth() &&
+      now.getDate() === date.getDate();
+
+    if (isToday) {
+      return `был(-а) в сети сегодня в ${timeStr}`;
+    }
+
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday =
+      yesterday.getFullYear() === date.getFullYear() &&
+      yesterday.getMonth() === date.getMonth() &&
+      yesterday.getDate() === date.getDate();
+
+    if (isYesterday) {
+      return `был(-а) в сети вчера в ${timeStr}`;
+    }
+
+    const dayBefore = new Date(now);
+    dayBefore.setDate(now.getDate() - 2);
+    const isDayBefore =
+      dayBefore.getFullYear() === date.getFullYear() &&
+      dayBefore.getMonth() === date.getMonth() &&
+      dayBefore.getDate() === date.getDate();
+
+    if (isDayBefore) {
+      return `был(-а) в сети позавчера в ${timeStr}`;
+    }
+
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    if (diffDays < 7) {
+      const dayWord = diffDays === 1 ? "день" : diffDays >= 2 && diffDays <= 4 ? "дня" : "дней";
+      return `был(-а) в сети ${diffDays} ${dayWord} назад`;
+    }
+
+    const diffWeeks = Math.floor(diffDays / 7);
+    if (diffWeeks < 4) {
+      const weekWord = diffWeeks === 1 ? "неделю" : diffWeeks >= 2 && diffWeeks <= 4 ? "недели" : "недель";
+      return `был(-а) в сети ${diffWeeks} ${weekWord} назад`;
+    }
+
+    const diffMonths = Math.floor(diffDays / 30);
+    if (diffMonths < 12) {
+      const monthWord = diffMonths === 1 ? "месяц" : diffMonths >= 2 && diffMonths <= 4 ? "месяца" : "месяцев";
+      return `был(-а) в сети ${diffMonths} ${monthWord} назад`;
+    }
+
+    const diffYears = Math.floor(diffDays / 365);
+    if (diffYears < 2) {
+      return "был(-а) в сети год назад";
+    }
+
+    return "был(-а) в сети очень давно";
   } catch (e) {
-    return t.offline;
+    return "был(-а) в сети очень давно";
   }
 };
 
@@ -191,6 +283,93 @@ export default function Messenger() {
   const [systemConfig, setSystemConfig] = useState<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // New Telegram features state
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [activeReactionMsgId, setActiveReactionMsgId] = useState<string | null>(null);
+  const [chatSearchOpen, setChatSearchOpen] = useState(false);
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [voiceRecordSeconds, setVoiceRecordSeconds] = useState(0);
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const [emojiTab, setEmojiTab] = useState<"emojis" | "stickers">("emojis");
+  const [showChatOptionsMenu, setShowChatOptionsMenu] = useState(false);
+  const [showSpoonGame, setShowSpoonGame] = useState(false);
+  const [catClicks, setCatClicks] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioAnalyserRef = useRef<AnalyserNode | null>(null);
+  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [liveWaveform, setLiveWaveform] = useState<number[]>([15, 25, 40, 20, 30, 50, 20, 35, 25, 15]);
+  const animFrameRef = useRef<number>(0);
+  const [attachedFile, setAttachedFile] = useState<{
+    name: string;
+    size: number;
+    type: string;
+    dataUrl?: string;
+  } | null>(null);
+  const voiceTimerRef = useRef<any>(null);
+
+  const playMeowSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(450, now);
+      osc.frequency.exponentialRampToValueAtTime(750, now + 0.15);
+      osc.frequency.exponentialRampToValueAtTime(520, now + 0.35);
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.35);
+    } catch {}
+  };
+
+  const playAudioTone = (type: "send" | "receive" | "voice", durationSec = 3) => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      if (type === "voice") {
+        const freqs = [330, 392, 440, 523, 440, 392, 349, 392];
+        const step = Math.min(Math.max(durationSec, 1.5), 5) / freqs.length;
+        freqs.forEach((freq, idx) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(freq, now + idx * step);
+          gain.gain.setValueAtTime(0.06, now + idx * step);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + (idx + 1) * step);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + idx * step);
+          osc.stop(now + (idx + 1) * step);
+        });
+      } else if (type === "send") {
+        if (profile?.soundEnabled === false) return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(587.33, now);
+        osc.frequency.exponentialRampToValueAtTime(880, now + 0.12);
+        gain.gain.setValueAtTime(0.05, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.14);
+      }
+    } catch {}
+  };
+
   const addNotification = (
     text: string,
     type: "success" | "error" | "info" = "info",
@@ -204,7 +383,7 @@ export default function Messenger() {
   };
 
   const getThemeStyles = () => {
-    const theme = profile?.theme || "dark";
+    const theme = profile?.theme || "oled";
     switch (theme) {
       case "light":
         return {
@@ -224,38 +403,71 @@ export default function Messenger() {
           text: "text-white",
           card: "bg-[#0a0a0a]",
           sidebar: "bg-black border-white/10",
-          msgMe: "bg-blue-600 text-white shadow-blue-900/20",
-          msgThem: "bg-[#121212] border-white/5 text-white",
+          msgMe: "bg-blue-600 text-white shadow-blue-900/30",
+          msgThem: "bg-[#121212] border-white/10 text-white",
           accent: "blue",
-          input: "bg-white/5 placeholder:text-white/20 text-white",
-          header: "bg-black/80 border-white/10",
+          input: "bg-white/5 placeholder:text-white/30 text-white",
+          header: "bg-black/90 border-white/10",
+        };
+      case "emerald":
+        return {
+          bg: "bg-[#04140e] text-emerald-50",
+          text: "text-emerald-50",
+          card: "bg-[#082319]",
+          sidebar: "bg-[#04140e] border-emerald-500/20",
+          msgMe: "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-emerald-950/40",
+          msgThem: "bg-[#082319] border-emerald-500/15 text-emerald-100",
+          accent: "green",
+          input: "bg-emerald-950/40 border border-emerald-500/20 placeholder:text-emerald-300/30 text-emerald-50",
+          header: "bg-[#04140e]/90 border-emerald-500/20",
         };
       case "cyber":
         return {
-          bg: "bg-[#050505]",
-          text: "text-[#00ff41]",
-          card: "bg-[#0a0a0a]",
-          sidebar: "bg-[#0a0a0a] border-[#00ff41]/20",
-          msgMe:
-            "bg-[#00ff41]/20 text-[#00ff41] border-[#00ff41]/50 shadow-[0_0_15px_rgba(0,255,65,0.1)]",
-          msgThem: "bg-black border-[#00ff41]/10 text-[#00ff41]/80",
-          accent: "green",
-          input:
-            "bg-black border border-[#00ff41]/20 placeholder:text-[#00ff41]/30 text-[#00ff41]",
-          header: "bg-[#050505]/80 border-[#00ff41]/20",
+          bg: "bg-[#040810]",
+          text: "text-cyan-50",
+          card: "bg-[#091322]",
+          sidebar: "bg-[#040810] border-cyan-500/20",
+          msgMe: "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-[0_0_15px_rgba(6,182,212,0.2)]",
+          msgThem: "bg-[#091322] border-cyan-500/15 text-cyan-100",
+          accent: "cyan",
+          input: "bg-cyan-950/30 border border-cyan-500/20 placeholder:text-cyan-400/30 text-cyan-50",
+          header: "bg-[#040810]/90 border-cyan-500/20",
         };
       case "sunset":
         return {
-          bg: "bg-[#1a111a] text-orange-100",
-          text: "text-orange-50",
-          card: "bg-[#2a1d2a]",
-          sidebar: "bg-[#251825] border-orange-500/20",
-          msgMe:
-            "bg-gradient-to-r from-orange-600 to-pink-600 text-white shadow-orange-900/20",
-          msgThem: "bg-[#2a1d2a] border-white/5 text-orange-100/90",
+          bg: "bg-[#140818] text-rose-100",
+          text: "text-rose-50",
+          card: "bg-[#230f2a]",
+          sidebar: "bg-[#140818] border-rose-500/20",
+          msgMe: "bg-gradient-to-r from-rose-600 to-orange-500 text-white shadow-rose-950/40",
+          msgThem: "bg-[#230f2a] border-rose-500/15 text-rose-100",
           accent: "orange",
-          input: "bg-white/5 placeholder:text-orange-900/30 text-orange-100",
-          header: "bg-[#1a111a]/80 border-orange-500/20",
+          input: "bg-rose-950/30 border border-rose-500/20 placeholder:text-rose-300/30 text-rose-50",
+          header: "bg-[#140818]/90 border-rose-500/20",
+        };
+      case "nordic":
+        return {
+          bg: "bg-[#09111e] text-slate-100",
+          text: "text-slate-50",
+          card: "bg-[#101c30]",
+          sidebar: "bg-[#09111e] border-sky-500/20",
+          msgMe: "bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow-sky-950/40",
+          msgThem: "bg-[#101c30] border-sky-500/15 text-slate-100",
+          accent: "sky",
+          input: "bg-sky-950/30 border border-sky-500/20 placeholder:text-sky-300/30 text-slate-50",
+          header: "bg-[#09111e]/90 border-sky-500/20",
+        };
+      case "telegram":
+        return {
+          bg: "bg-[#0e1621] text-white",
+          text: "text-white",
+          card: "bg-[#17212b]",
+          sidebar: "bg-[#0e1621] border-[#1f2c38]",
+          msgMe: "bg-[#2b5278] text-white shadow-black/20",
+          msgThem: "bg-[#182533] border-[#223345] text-white",
+          accent: "blue",
+          input: "bg-[#17212b] placeholder:text-slate-400 text-white border border-[#223345]",
+          header: "bg-[#17212b]/95 border-[#1f2c38]",
         };
       default:
         return {
@@ -269,6 +481,28 @@ export default function Messenger() {
           input: "bg-white/5 placeholder:text-white/20 text-white",
           header: "bg-[#0f172a]/80 border-white/5",
         };
+    }
+  };
+
+  const getFontSizeClass = () => {
+    switch (profile?.fontSize) {
+      case "small":
+        return "text-[13px] leading-relaxed";
+      case "large":
+        return "text-[17px] leading-relaxed";
+      default:
+        return "text-[15px] leading-relaxed";
+    }
+  };
+
+  const getBubbleRadiusClass = (isMe: boolean) => {
+    switch (profile?.bubbleStyle) {
+      case "rounded":
+        return isMe ? "rounded-[32px] rounded-br-sm" : "rounded-[32px] rounded-bl-sm";
+      case "sharp":
+        return isMe ? "rounded-xl rounded-br-xs" : "rounded-xl rounded-bl-xs";
+      default:
+        return isMe ? "rounded-[24px] rounded-br-none" : "rounded-[24px] rounded-bl-none";
     }
   };
 
@@ -288,6 +522,11 @@ export default function Messenger() {
       onClick: () => setShowUserSearch(true),
     },
     {
+      label: "Избранное",
+      icon: <Bookmark className="w-5 h-5 text-yellow-500" />,
+      onClick: () => openSavedMessages(),
+    },
+    {
       label: t.createGroup,
       icon: <Users className="w-5 h-5" />,
       onClick: () => setShowGroupCreate(true),
@@ -304,12 +543,464 @@ export default function Messenger() {
     setShowEmoji(false);
   };
 
+  // Open or create Saved Messages chat (Избранное)
+  const openSavedMessages = async () => {
+    if (!profile) return;
+    try {
+      const savedChatId = `saved_${profile.uid}`;
+      const savedDoc = await getDoc(doc(db, "chats", savedChatId));
+      if (!savedDoc.exists()) {
+        const newSavedChat = {
+          id: savedChatId,
+          type: "saved" as const,
+          name: "Избранное (Saved Messages)",
+          avatarURL: "https://api.dicebear.com/7.x/identicon/svg?seed=saved_" + profile.uid,
+          creatorId: profile.uid,
+          memberIds: [profile.uid],
+          createdAt: serverTimestamp(),
+          lastMessage: "Личные заметки и сохраненные сообщения",
+          lastMessageAt: serverTimestamp(),
+        };
+        await setDoc(doc(db, "chats", savedChatId), newSavedChat);
+        setActiveChat(newSavedChat as any);
+      } else {
+        setActiveChat({ id: savedDoc.id, ...savedDoc.data() } as Chat);
+      }
+      setShowSidebarMenu(false);
+      addNotification("Переход в Избранное", "info");
+    } catch (e) {
+      console.error(e);
+      addNotification("Ошибка открытия Избранного", "error");
+    }
+  };
+
+  // Toggle Reaction on message
+  const toggleReaction = async (msg: Message, emoji: string) => {
+    if (!activeChat || !profile?.uid) return;
+    try {
+      const currentReactions: Record<string, string[]> = { ...(msg.reactions || {}) };
+      const currentList: string[] = currentReactions[emoji] ? [...currentReactions[emoji]] : [];
+      const userIndex = currentList.indexOf(profile.uid);
+
+      if (userIndex > -1) {
+        currentList.splice(userIndex, 1);
+      } else {
+        currentList.push(profile.uid);
+      }
+
+      if (currentList.length === 0) {
+        delete currentReactions[emoji];
+      } else {
+        currentReactions[emoji] = currentList;
+      }
+
+      await updateDoc(
+        doc(db, `chats/${activeChat.id}/messages`, msg.id),
+        { reactions: currentReactions }
+      );
+      setActiveReactionMsgId(null);
+    } catch (err) {
+      console.error("Error updating reactions", err);
+      addNotification("Не удалось поставить реакцию", "error");
+    }
+  };
+
+  // Toggle Pin message
+  const togglePinMessage = async (msg: Message) => {
+    if (!activeChat || !profile?.uid) return;
+    try {
+      const isPinned = !msg.pinned;
+      await updateDoc(doc(db, `chats/${activeChat.id}/messages`, msg.id), {
+        pinned: isPinned,
+        pinnedAt: isPinned ? serverTimestamp() : null,
+      });
+
+      if (isPinned) {
+        await updateDoc(doc(db, "chats", activeChat.id), {
+          pinnedMessageId: msg.id,
+          pinnedMessage: {
+            id: msg.id,
+            text: msg.text,
+            senderName: msg.senderName,
+          },
+        });
+        addNotification("Сообщение закреплено", "success");
+      } else if (activeChat.pinnedMessageId === msg.id) {
+        await updateDoc(doc(db, "chats", activeChat.id), {
+          pinnedMessageId: null,
+          pinnedMessage: null,
+        });
+        addNotification("Сообщение откреплено", "info");
+      }
+    } catch (err) {
+      console.error("Failed to pin message", err);
+      addNotification("Ошибка при закреплении сообщения", "error");
+    }
+  };
+
+  // Toggle Mute chat
+  const toggleMuteChat = async (chatId: string) => {
+    if (!profile) return;
+    try {
+      const targetChat = chats.find((c) => c.id === chatId) || activeChat;
+      if (!targetChat) return;
+      const currentMuted = targetChat.mutedBy || [];
+      const isMuted = currentMuted.includes(profile.uid);
+      const newMuted = isMuted
+        ? currentMuted.filter((id) => id !== profile.uid)
+        : [...currentMuted, profile.uid];
+
+      await updateDoc(doc(db, "chats", chatId), {
+        mutedBy: newMuted,
+      });
+
+      addNotification(isMuted ? "Уведомления включены" : "Чат заглушен", "info");
+    } catch (err) {
+      console.error(err);
+      addNotification("Ошибка изменения настроек чата", "error");
+    }
+  };
+
+  // Export chat transcript to file
+  const exportChatHistory = () => {
+    if (!activeChat || messages.length === 0) {
+      addNotification("Нет сообщений для экспорта", "info");
+      return;
+    }
+    const lines = [
+      `--- Nova Messenger Chat Transcript ---`,
+      `Chat: ${activeChat.name || "Direct Chat"}`,
+      `Date: ${new Date().toLocaleString()}`,
+      `Total messages: ${messages.length}`,
+      `--------------------------------------\n`,
+    ];
+    messages.forEach((m) => {
+      const time = m.createdAt?.toDate ? format(m.createdAt.toDate(), "yyyy-MM-dd HH:mm:ss") : "Unknown time";
+      lines.push(`[${time}] ${m.senderName}: ${m.text}`);
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chat_export_${(activeChat.name || "chat").replace(/[^a-zA-Z0-9_-]/g, "_")}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setShowChatOptionsMenu(false);
+    addNotification("История чата экспортирована в файл", "success");
+  };
+
+  // Real voice recording via microphone (MediaRecorder + Web Audio API Analyser)
+  const startVoiceRecording = async () => {
+    if (isRecordingVoice) return;
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        addNotification("Ваш браузер не поддерживает запись с микрофона", "error");
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
+      audioChunksRef.current = [];
+
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        const audioCtx = new AudioCtx();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+        audioAnalyserRef.current = analyser;
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const updateWave = () => {
+          analyser.getByteFrequencyData(dataArray);
+          const samples: number[] = [];
+          const step = Math.max(1, Math.floor(dataArray.length / 10));
+          for (let i = 0; i < 10; i++) {
+            const val = dataArray[i * step] || 10;
+            samples.push(Math.max(12, Math.min(100, Math.round((val / 255) * 100))));
+          }
+          setLiveWaveform(samples);
+          animFrameRef.current = requestAnimationFrame(updateWave);
+        };
+        animFrameRef.current = requestAnimationFrame(updateWave);
+      }
+
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "audio/mp4";
+
+      const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 32000 });
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.start(100);
+      setIsRecordingVoice(true);
+      setVoiceRecordSeconds(0);
+
+      voiceTimerRef.current = setInterval(() => {
+        setVoiceRecordSeconds((prev) => {
+          if (prev >= 59) {
+            finishVoiceRecording();
+            return 60;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch (err) {
+      console.error("Microphone access error:", err);
+      addNotification("Разрешите доступ к микрофону в браузере для отправки голосовых", "error");
+    }
+  };
+
+  const cancelVoiceRecording = () => {
+    if (voiceTimerRef.current) clearInterval(voiceTimerRef.current);
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop());
+      audioStreamRef.current = null;
+    }
+    setIsRecordingVoice(false);
+    setVoiceRecordSeconds(0);
+  };
+
+  const finishVoiceRecording = async () => {
+    if (!activeChat || !profile) {
+      cancelVoiceRecording();
+      return;
+    }
+    const duration = Math.max(1, voiceRecordSeconds);
+    if (voiceTimerRef.current) clearInterval(voiceTimerRef.current);
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      cancelVoiceRecording();
+      return;
+    }
+
+    recorder.onstop = async () => {
+      try {
+        const mime = recorder.mimeType || "audio/webm";
+        const audioBlob = new Blob(audioChunksRef.current, { type: mime });
+        if (audioStreamRef.current) {
+          audioStreamRef.current.getTracks().forEach((track) => track.stop());
+          audioStreamRef.current = null;
+        }
+        setIsRecordingVoice(false);
+        setVoiceRecordSeconds(0);
+
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+          const dataUrl = reader.result as string;
+          const msgData: Record<string, any> = {
+            chatId: activeChat.id,
+            senderId: profile.uid,
+            senderName: profile.displayName,
+            senderNumericId: profile.id || 0,
+            isPlus: profile.isPlus || false,
+            senderRole: profile.role || "user",
+            text: `🎤 Голосовое сообщение (${duration} сек)`,
+            createdAt: serverTimestamp(),
+            type: "voice" as const,
+            voiceDuration: duration,
+            voiceWaveform: liveWaveform,
+            attachment: {
+              name: `voice_${Date.now()}.webm`,
+              size: audioBlob.size,
+              type: mime,
+              dataUrl,
+            },
+          };
+          await addDoc(collection(db, `chats/${activeChat.id}/messages`), msgData);
+          await updateDoc(doc(db, "chats", activeChat.id), {
+            lastMessage: `🎤 Голосовое сообщение (${duration}с)`,
+            lastMessageAt: serverTimestamp(),
+          });
+          playAudioTone("send");
+          addNotification("Голосовое сообщение отправлено", "success");
+        };
+        reader.readAsDataURL(audioBlob);
+      } catch (e) {
+        console.error(e);
+        addNotification("Ошибка сохранения аудиозаписи", "error");
+      }
+    };
+
+    recorder.stop();
+  };
+
+  const playVoiceMessage = (msgId: string, durationSec = 3, dataUrl?: string) => {
+    if (activeAudioRef.current) {
+      activeAudioRef.current.pause();
+      activeAudioRef.current = null;
+    }
+    if (playingVoiceId === msgId) {
+      setPlayingVoiceId(null);
+      return;
+    }
+    setPlayingVoiceId(msgId);
+    if (dataUrl) {
+      const audio = new Audio(dataUrl);
+      activeAudioRef.current = audio;
+      audio.onended = () => {
+        setPlayingVoiceId(null);
+        activeAudioRef.current = null;
+      };
+      audio.onerror = () => {
+        setPlayingVoiceId(null);
+        activeAudioRef.current = null;
+        playAudioTone("voice", durationSec);
+      };
+      audio.play().catch(() => {
+        playAudioTone("voice", durationSec);
+      });
+    } else {
+      playAudioTone("voice", durationSec);
+      setTimeout(() => {
+        setPlayingVoiceId((curr) => (curr === msgId ? null : curr));
+      }, Math.max(durationSec * 1000, 2500));
+    }
+  };
+
+  // Send sticker
+  const sendSticker = async (stickerEmoji: string, label: string) => {
+    if (!activeChat || !profile) return;
+    try {
+      const msgData = {
+        chatId: activeChat.id,
+        senderId: profile.uid,
+        senderName: profile.displayName,
+        senderNumericId: profile.id || 0,
+        isPlus: profile.isPlus || false,
+        senderRole: profile.role || "user",
+        text: stickerEmoji,
+        createdAt: serverTimestamp(),
+        type: "sticker" as const,
+        stickerUrl: label,
+      };
+      await addDoc(collection(db, `chats/${activeChat.id}/messages`), msgData);
+      await updateDoc(doc(db, "chats", activeChat.id), {
+        lastMessage: `${stickerEmoji} [Стикер] ${label}`,
+        lastMessageAt: serverTimestamp(),
+      });
+      playAudioTone("send");
+      setShowEmoji(false);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Forward message safely without undefined keys
+  const forwardMessageToChat = async (targetChatId: string) => {
+    if (!forwardingMessage || !profile) return;
+    try {
+      const msgData: Record<string, any> = {
+        chatId: targetChatId,
+        senderId: profile.uid,
+        senderName: profile.displayName,
+        senderNumericId: profile.id || 0,
+        isPlus: profile.isPlus || false,
+        senderRole: profile.role || "user",
+        text: forwardingMessage.text || "",
+        createdAt: serverTimestamp(),
+        type: forwardingMessage.type || "text",
+        isForwarded: true,
+        forwardedFrom: forwardingMessage.senderName,
+      };
+      if (forwardingMessage.attachment) {
+        msgData.attachment = forwardingMessage.attachment;
+      }
+      if (forwardingMessage.voiceDuration) {
+        msgData.voiceDuration = forwardingMessage.voiceDuration;
+      }
+      if (forwardingMessage.voiceWaveform) {
+        msgData.voiceWaveform = forwardingMessage.voiceWaveform;
+      }
+      if (forwardingMessage.stickerUrl) {
+        msgData.stickerUrl = forwardingMessage.stickerUrl;
+      }
+      await addDoc(collection(db, `chats/${targetChatId}/messages`), msgData);
+      await updateDoc(doc(db, "chats", targetChatId), {
+        lastMessage: `[Переслано] ${forwardingMessage.text || "Вложение"}`,
+        lastMessageAt: serverTimestamp(),
+      });
+      playAudioTone("send");
+      addNotification("Сообщение переслано!", "success");
+      setForwardingMessage(null);
+    } catch (err) {
+      console.error(err);
+      addNotification("Ошибка пересылки сообщения", "error");
+    }
+  };
+
   const handleFileUpload = () => {
     const input = document.createElement("input");
     input.type = "file";
+    input.accept = "*/*";
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) addNotification(`Файл ${file.name} прикреплен`, "success");
+      if (!file) return;
+      if (file.type.startsWith("image/")) {
+        const img = new Image();
+        const reader = new FileReader();
+        reader.onload = (loadEvt) => {
+          img.src = loadEvt.target?.result as string;
+        };
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 1200;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx?.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.75);
+          setAttachedFile({
+            name: file.name,
+            size: Math.round(compressedDataUrl.length * 0.75),
+            type: "image/jpeg",
+            dataUrl: compressedDataUrl,
+          });
+          addNotification(`Фото «${file.name}» оптимизировано и прикреплено`, "success");
+        };
+        reader.readAsDataURL(file);
+      } else {
+        if (file.size > 600 * 1024) {
+          addNotification("Размер файла не должен превышать 600 КБ", "error");
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (loadEvt) => {
+          setAttachedFile({
+            name: file.name,
+            size: file.size,
+            type: file.type || "application/octet-stream",
+            dataUrl: loadEvt.target?.result as string,
+          });
+          addNotification(`Файл «${file.name}» прикреплен и готов к отправке`, "success");
+        };
+        reader.readAsDataURL(file);
+      }
     };
     input.click();
   };
@@ -344,9 +1035,9 @@ export default function Messenger() {
         });
       } else {
         const data = globalChatDoc.data();
-        if (!data.memberIds.includes(profile.uid)) {
+        if (!data.memberIds?.includes(profile.uid)) {
           await updateDoc(globalChatRef, {
-            memberIds: [...data.memberIds, profile.uid],
+            memberIds: [...(data.memberIds || []), profile.uid],
           });
         }
       }
@@ -362,10 +1053,17 @@ export default function Messenger() {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        setChats(snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as Chat));
+        const seen = new Set<string>();
+        const uniqueChats: Chat[] = [];
+        snapshot.docs.forEach((d) => {
+          if (!seen.has(d.id)) {
+            seen.add(d.id);
+            uniqueChats.push({ id: d.id, ...d.data() } as Chat);
+          }
+        });
+        setChats(uniqueChats);
       },
       (err) => {
-        // Silently handle if someone isn't allowed to read some chats
         console.error("Chat fetch error", err);
       },
     );
@@ -402,9 +1100,15 @@ export default function Messenger() {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        setMessages(
-          snapshot.docs.map((d) => ({ id: d.id, ...d.data() }) as Message),
-        );
+        const seen = new Set<string>();
+        const uniqueMessages: Message[] = [];
+        snapshot.docs.forEach((d) => {
+          if (!seen.has(d.id)) {
+            seen.add(d.id);
+            uniqueMessages.push({ id: d.id, ...d.data() } as Message);
+          }
+        });
+        setMessages(uniqueMessages);
       },
       (err) =>
         handleFirestoreError(
@@ -421,13 +1125,18 @@ export default function Messenger() {
   }, [messages]);
 
   const sendMessage = async () => {
-    if (!inputText.trim() || !activeChat || !profile) return;
+    if ((!inputText.trim() && !attachedFile) || !activeChat || !profile) return;
 
     if (
       profile.isMuted &&
       (!profile.muteExpires || profile.muteExpires.toDate() > new Date())
     ) {
       addNotification(`Вы замучены. Причина: ${profile.muteReason}`, "error");
+      return;
+    }
+
+    if (partnerProfile?.isBanned || profile.isBanned) {
+      addNotification("Общение с заблокированным пользователем недоступно", "error");
       return;
     }
 
@@ -447,27 +1156,42 @@ export default function Messenger() {
         );
         setEditingMessage(null);
       } else {
-        const msgData = {
+        const finalAttachment = attachedFile || null;
+        const msgText = inputText.trim() || (finalAttachment ? `📎 ${finalAttachment.name}` : "");
+        const msgData: any = {
           chatId: activeChat.id,
           senderId: profile.uid,
           senderName: profile.displayName,
           senderNumericId: profile.id || 0,
           isPlus: profile.isPlus || false,
           senderRole: profile.role || "user",
-          text: inputText,
+          text: msgText,
           createdAt: serverTimestamp(),
-          type: "text",
+          type: finalAttachment ? "file" : "text",
         };
+        if (finalAttachment) {
+          msgData.attachment = finalAttachment;
+        }
+        if (replyingTo) {
+          msgData.replyTo = {
+            id: replyingTo.id,
+            text: replyingTo.text,
+            senderName: replyingTo.senderName,
+          };
+          setReplyingTo(null);
+        }
         await addDoc(
           collection(db, `chats/${activeChat.id}/messages`),
           msgData,
         );
         await updateDoc(doc(db, "chats", activeChat.id), {
-          lastMessage: inputText,
+          lastMessage: msgText,
           lastMessageAt: serverTimestamp(),
         });
+        playAudioTone("send");
       }
       setInputText("");
+      setAttachedFile(null);
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, "messages");
     }
@@ -476,17 +1200,21 @@ export default function Messenger() {
   const createGroup = async (name: string) => {
     if (!profile) return;
     try {
-      const chatRef = await addDoc(collection(db, "chats"), {
+      const groupData = {
         type: "group",
         name,
         avatarURL: `https://api.dicebear.com/7.x/initials/svg?seed=${name}`,
         creatorId: profile.uid,
         memberIds: [profile.uid],
         createdAt: serverTimestamp(),
-        lastMessage: "Group created",
+        lastMessage: "Группа создана",
         lastMessageAt: serverTimestamp(),
-      });
+      };
+      const chatRef = await addDoc(collection(db, "chats"), groupData);
+      setPartnerProfile(null);
+      setActiveChat({ id: chatRef.id, ...groupData } as any);
       setShowGroupCreate(false);
+      addNotification("Группа успешно создана", "success");
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, "chats");
     }
@@ -507,6 +1235,7 @@ export default function Messenger() {
       );
 
       if (existingChat) {
+        setPartnerProfile(null);
         setActiveChat({ id: existingChat.id, ...existingChat.data() } as Chat);
       } else {
         const newChatRef = await addDoc(collection(db, "chats"), {
@@ -519,6 +1248,7 @@ export default function Messenger() {
           lastMessage: "Chat started",
         });
         const newChatSnap = await getDoc(newChatRef);
+        setPartnerProfile(null);
         setActiveChat({ id: newChatSnap.id, ...newChatSnap.data() } as Chat);
       }
       setShowUserSearch(false);
@@ -549,7 +1279,8 @@ export default function Messenger() {
     profile?.role === "creator" ||
     profile?.id === 1 ||
     String(profile?.id) === "1" ||
-    profile?.email === "iluha1032020@gmail.com";
+    profile?.email === "iluha1032020@gmail.com" ||
+    profile?.email === "iluha032020@gmail.com";
   const isAdmin = profile?.role === "admin" || isCreator;
 
   const getMuteStatus = () => {
@@ -688,9 +1419,9 @@ export default function Messenger() {
                     .toLowerCase()
                     .includes(searchText.toLowerCase()),
               )
-              .map((chat) => (
+              .map((chat, chatIdx) => (
                 <motion.div
-                  key={chat.id}
+                  key={`chat-${chat.id || chatIdx}`}
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   onClick={() => setActiveChat(chat)}
@@ -841,11 +1572,19 @@ export default function Messenger() {
                   )}
                 </motion.div>
                 <div>
-                  <h2 className="font-black text-xl tracking-tighter uppercase">
-                    {activeChat.type === "direct"
-                      ? partnerProfile?.displayName || activeChat.name
-                      : activeChat.name}
-                  </h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-black text-xl tracking-tighter uppercase">
+                      {activeChat.type === "direct"
+                        ? partnerProfile?.displayName || activeChat.name
+                        : activeChat.name}
+                    </h2>
+                    {activeChat.type === "direct" && partnerProfile?.isBanned && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-500/20 border border-rose-500/40 text-[10px] font-bold text-rose-400">
+                        <Ban className="w-3 h-3 text-rose-400" />
+                        Заблокирован
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     {activeChat.type === "direct" ? (
                       isOnline(partnerProfile?.lastSeen) ? (
@@ -874,16 +1613,56 @@ export default function Messenger() {
                   </div>
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-1.5">
+                {/* Search in chat */}
+                <button
+                  title="Поиск в чате"
+                  onClick={() => {
+                    setChatSearchOpen(!chatSearchOpen);
+                    if (chatSearchOpen) setChatSearchQuery("");
+                  }}
+                  className={`p-2.5 rounded-2xl transition-all ${
+                    chatSearchOpen
+                      ? "bg-blue-600 text-white"
+                      : profile?.theme === "light"
+                        ? "hover:bg-slate-100 text-slate-500"
+                        : "hover:bg-white/10 text-white/50 hover:text-white"
+                  }`}
+                >
+                  <SearchIcon className="w-5 h-5" />
+                </button>
+
+                {/* Mute Chat */}
+                <button
+                  title={activeChat.mutedBy?.includes(profile?.uid || "") ? "Включить звук" : "Заглушить чат"}
+                  onClick={() => toggleMuteChat(activeChat.id)}
+                  className={`p-2.5 rounded-2xl transition-all ${
+                    activeChat.mutedBy?.includes(profile?.uid || "")
+                      ? "bg-amber-500/20 text-amber-500"
+                      : profile?.theme === "light"
+                        ? "hover:bg-slate-100 text-slate-500"
+                        : "hover:bg-white/10 text-white/50 hover:text-white"
+                  }`}
+                >
+                  {activeChat.mutedBy?.includes(profile?.uid || "") ? (
+                    <BellOff className="w-5 h-5" />
+                  ) : (
+                    <Bell className="w-5 h-5" />
+                  )}
+                </button>
+
+                {/* Add member (group) */}
                 {activeChat.type === "group" && (
                   <button
                     title={t.addMember}
                     onClick={() => setShowUserSearch(true)}
-                    className={`p-3 rounded-2xl transition-all ${profile?.theme === "light" ? "hover:bg-green-50 text-green-600" : "hover:bg-green-500/10 text-green-500"}`}
+                    className={`p-2.5 rounded-2xl transition-all ${profile?.theme === "light" ? "hover:bg-green-50 text-green-600" : "hover:bg-green-500/10 text-green-500"}`}
                   >
                     <UserPlus className="w-5 h-5" />
                   </button>
                 )}
+
+                {/* Info */}
                 <button
                   title={isAdmin ? "Админ-действия / Инфо" : "Информация"}
                   onClick={() =>
@@ -893,107 +1672,481 @@ export default function Messenger() {
                         ? setShowGroupInfo(activeChat)
                         : null
                   }
-                  className={`p-3 rounded-2xl transition-all ${profile?.theme === "light" ? "hover:bg-slate-100 text-slate-400" : "hover:bg-white/5 text-white/40 hover:text-white"}`}
+                  className={`p-2.5 rounded-2xl transition-all ${profile?.theme === "light" ? "hover:bg-slate-100 text-slate-400" : "hover:bg-white/5 text-white/40 hover:text-white"}`}
                 >
                   <Info className="w-5 h-5" />
                 </button>
-                <div className="w-[1px] h-6 bg-white/5 mx-2 self-center block" />
+
+                {/* More Options Menu (Export, etc.) */}
+                <div className="relative">
+                  <button
+                    title="Опции чата"
+                    onClick={() => setShowChatOptionsMenu(!showChatOptionsMenu)}
+                    className={`p-2.5 rounded-2xl transition-all ${profile?.theme === "light" ? "hover:bg-slate-100 text-slate-400" : "hover:bg-white/5 text-white/40 hover:text-white"}`}
+                  >
+                    <MoreIcon className="w-5 h-5" />
+                  </button>
+
+                  <AnimatePresence>
+                    {showChatOptionsMenu && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                        className={`absolute right-0 top-full mt-2 w-56 rounded-2xl shadow-2xl border p-2 z-50 backdrop-blur-2xl ${
+                          profile?.theme === "light"
+                            ? "bg-white/95 border-slate-200 text-slate-800"
+                            : "bg-[#0f172a]/95 border-white/10 text-white"
+                        }`}
+                      >
+                        <button
+                          onClick={exportChatHistory}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold hover:bg-blue-600/10 hover:text-blue-500 transition-colors text-left"
+                        >
+                          <Download className="w-4 h-4 text-blue-500" />
+                          <span>Экспорт переписки (.txt)</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowChatOptionsMenu(false);
+                            if (activeChat.pinnedMessage) {
+                              document.getElementById(`msg-${activeChat.pinnedMessage.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                            } else {
+                              addNotification("Нет закрепленных сообщений", "info");
+                            }
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold hover:bg-white/10 transition-colors text-left"
+                        >
+                          <Pin className="w-4 h-4 text-yellow-500" />
+                          <span>К закрепленному</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowChatOptionsMenu(false);
+                            toggleMuteChat(activeChat.id);
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold hover:bg-white/10 transition-colors text-left"
+                        >
+                          <Bell className="w-4 h-4 text-purple-500" />
+                          <span>{activeChat.mutedBy?.includes(profile?.uid || "") ? "Включить звук" : "Без звука"}</span>
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                <div className="w-[1px] h-6 bg-white/5 mx-1 self-center block" />
                 <button
                   title="Магазин Nova Plus"
                   onClick={() => setShowStore(true)}
-                  className={`p-3 rounded-2xl transition-all group ${profile?.theme === "light" ? "hover:bg-blue-50 text-blue-600" : "hover:bg-blue-500/10 text-blue-500"}`}
+                  className={`p-2.5 rounded-2xl transition-all group ${profile?.theme === "light" ? "hover:bg-blue-50 text-blue-600" : "hover:bg-blue-500/10 text-blue-500"}`}
                 >
                   <Sparkles className="w-5 h-5 group-hover:scale-110 transition-transform" />
                 </button>
               </div>
             </div>
 
+            {/* Pinned Message Sticky Bar */}
+            {activeChat.pinnedMessage && (
+              <div
+                className={`px-6 py-2 border-b flex items-center justify-between text-xs backdrop-blur-md z-10 transition-all ${
+                  profile?.theme === "light"
+                    ? "bg-blue-50/90 border-blue-100 text-blue-900"
+                    : "bg-blue-950/40 border-blue-500/20 text-blue-200"
+                }`}
+              >
+                <button
+                  onClick={() =>
+                    document
+                      .getElementById(`msg-${activeChat.pinnedMessage?.id}`)
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" })
+                  }
+                  className="flex items-center gap-3 truncate text-left flex-1 hover:opacity-80 transition-opacity"
+                >
+                  <div className="p-1.5 rounded-lg bg-blue-500/20 text-blue-500 shrink-0">
+                    <Pin className="w-3.5 h-3.5" />
+                  </div>
+                  <div className="truncate">
+                    <span className="font-black text-[9px] uppercase tracking-wider block opacity-70">
+                      Закрепленное сообщение ({activeChat.pinnedMessage.senderName})
+                    </span>
+                    <span className="truncate block font-semibold text-xs">
+                      {activeChat.pinnedMessage.text}
+                    </span>
+                  </div>
+                </button>
+                <button
+                  onClick={async () => {
+                    await updateDoc(doc(db, "chats", activeChat.id), {
+                      pinnedMessageId: null,
+                      pinnedMessage: null,
+                    });
+                    addNotification("Сообщение откреплено", "info");
+                  }}
+                  className="p-1 hover:bg-white/10 rounded-lg ml-2 opacity-60 hover:opacity-100 transition-opacity"
+                  title="Открепить"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* In-Chat Search Bar */}
+            {chatSearchOpen && (
+              <div
+                className={`px-6 py-3 border-b flex items-center gap-3 z-10 backdrop-blur-xl ${
+                  profile?.theme === "light"
+                    ? "bg-slate-100/95 border-slate-200"
+                    : "bg-[#0b1329]/95 border-white/10"
+                }`}
+              >
+                <SearchIcon className="w-4 h-4 text-blue-500 shrink-0" />
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="Поиск по сообщениям в этом чате..."
+                  value={chatSearchQuery}
+                  onChange={(e) => setChatSearchQuery(e.target.value)}
+                  className="flex-1 bg-transparent text-sm focus:outline-none font-medium"
+                />
+                {chatSearchQuery && (
+                  <span className="text-[10px] font-black uppercase tracking-wider opacity-60">
+                    {
+                      messages.filter((m) =>
+                        m.text?.toLowerCase().includes(chatSearchQuery.toLowerCase()),
+                      ).length
+                    }{" "}
+                    совпадений
+                  </span>
+                )}
+                <button
+                  onClick={() => {
+                    setChatSearchOpen(false);
+                    setChatSearchQuery("");
+                  }}
+                  className="p-1.5 hover:bg-white/10 rounded-full"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
             {/* Messages */}
             <div className="flex-1 overflow-y-auto px-8 py-6 flex flex-col gap-4 custom-scrollbar z-10">
               <div className="flex-1" />
               <AnimatePresence mode="popLayout">
-                {messages.map((msg, i) => {
-                  const isMe = msg.senderId === profile?.uid;
-                  return (
-                    <motion.div
-                      layout
-                      initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      key={msg.id}
-                      className={`flex ${isMe ? "justify-end" : "justify-start"} group`}
-                    >
-                      <div
-                        className={`relative px-5 py-3 rounded-[24px] max-w-[70%] shadow-2xl border transition-all duration-300 ${isMe ? `rounded-br-none ${styles.msgMe}` : `rounded-bl-none ${styles.msgThem}`}`}
-                      >
-                        {!isMe && (
-                          <div className="flex items-center gap-1 mb-1.5 min-w-0">
-                            <p
-                              className={`text-[10px] font-black uppercase tracking-widest truncate ${styles.accent === "green" ? "text-[#00ff41]" : "text-blue-500"}`}
-                            >
-                              {msg.senderName}
-                            </p>
-                            <VerificationBadge
-                              id={(msg as any).senderNumericId}
-                              isPlus={(msg as any).isPlus}
-                              role={(msg as any).senderRole}
-                            />
-                          </div>
-                        )}
-                        <p className="text-[15px] leading-relaxed font-medium whitespace-pre-wrap break-words">
-                          {msg.text}
-                        </p>
-                        <div className="flex items-center justify-end gap-2 mt-2 opacity-50">
-                          {msg.editedAt && (
-                            <span className="text-[9px] italic font-bold">
-                              EDT
-                            </span>
-                          )}
-                          <span className="text-[10px] font-black tracking-tighter">
-                            {msg.createdAt?.toDate()
-                              ? format(msg.createdAt.toDate(), "HH:mm")
-                              : ""}
-                          </span>
-                          {isMe && (
-                            <Check className="w-3.5 h-3.5 text-white/60" />
-                          )}
-                        </div>
+                {messages
+                  .filter((msg) =>
+                    !chatSearchQuery
+                      ? true
+                      : msg.text?.toLowerCase().includes(chatSearchQuery.toLowerCase()),
+                  )
+                  .map((msg, msgIdx) => {
+                    const isMe = msg.senderId === profile?.uid;
+                    const hasReactions =
+                      msg.reactions && Object.keys(msg.reactions).length > 0;
 
+                    return (
+                      <motion.div
+                        layout
+                        initial={{ opacity: 0, y: 20, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        key={`msg-${msg.id || msgIdx}`}
+                        id={`msg-${msg.id || msgIdx}`}
+                        onDoubleClick={() => toggleReaction(msg, "❤️")}
+                        className={`flex ${isMe ? "justify-end" : "justify-start"} group relative`}
+                      >
                         <div
-                          className={`absolute ${isMe ? "right-full mr-4" : "left-full ml-4"} top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 flex gap-2 transition-all`}
+                          className={`relative px-5 py-3 ${getBubbleRadiusClass(isMe)} max-w-[75%] md:max-w-[70%] shadow-2xl border transition-all duration-300 ${
+                            isMe
+                              ? styles.msgMe
+                              : styles.msgThem
+                          }`}
                         >
-                          {isMe && (
+                          {/* Forwarded Tag */}
+                          {msg.isForwarded && (
+                            <div className="flex items-center gap-1.5 text-[10px] font-bold opacity-75 italic mb-1.5 text-blue-400">
+                              <Share2 className="w-3 h-3 shrink-0" />
+                              <span>Переслано от {msg.forwardedFrom || "пользователя"}</span>
+                            </div>
+                          )}
+
+                          {/* Quoted / Reply Preview */}
+                          {msg.replyTo && (
                             <button
-                              onClick={() => {
-                                setEditingMessage(msg);
-                                setInputText(msg.text);
-                              }}
-                              className="p-2 hover:bg-white/10 rounded-xl transition-colors text-white/40 hover:text-white"
-                              title="Изменить"
+                              type="button"
+                              onClick={() =>
+                                document
+                                  .getElementById(`msg-${msg.replyTo?.id}`)
+                                  ?.scrollIntoView({ behavior: "smooth", block: "center" })
+                              }
+                              className="w-full text-left pl-3 py-1 mb-2 border-l-2 border-blue-500 bg-black/10 dark:bg-white/5 rounded-r-xl hover:opacity-80 transition-opacity text-xs"
                             >
-                              <Edit2 className="w-4 h-4" />
+                              <span className="font-black text-[9px] uppercase tracking-wider text-blue-400 block truncate">
+                                {msg.replyTo.senderName}
+                              </span>
+                              <span className="opacity-80 line-clamp-1 text-[11px] font-medium">
+                                {msg.replyTo.text}
+                              </span>
                             </button>
                           )}
-                          <button
-                            onClick={() => {
-                              if (isMe || profile?.id === 1)
-                                deleteDoc(
-                                  doc(
-                                    db,
-                                    `chats/${activeChat.id}/messages`,
-                                    msg.id,
-                                  ),
-                                );
-                            }}
-                            className="p-2 hover:bg-red-500/10 rounded-xl transition-colors text-red-500/40 hover:text-red-500"
-                            title="Удалить"
+
+                          {/* Sender name for received messages */}
+                          {!isMe && (
+                            <div className="flex items-center gap-1 mb-1.5 min-w-0">
+                              <p
+                                className={`text-[10px] font-black uppercase tracking-widest truncate ${
+                                  styles.accent === "green"
+                                    ? "text-emerald-400"
+                                    : "text-blue-500"
+                                }`}
+                              >
+                                {msg.senderName}
+                              </p>
+                              <VerificationBadge
+                                id={(msg as any).senderNumericId}
+                                isPlus={(msg as any).isPlus}
+                                role={(msg as any).senderRole}
+                              />
+                            </div>
+                          )}
+
+                          {/* Message Attachment Rendering */}
+                          {msg.attachment && (
+                            <div className="mb-2.5">
+                              {msg.attachment.type?.startsWith("image/") && msg.attachment.dataUrl ? (
+                                <div className="rounded-2xl overflow-hidden border border-white/10 max-w-sm">
+                                  <img
+                                    src={msg.attachment.dataUrl}
+                                    alt={msg.attachment.name}
+                                    className="w-full max-h-72 object-cover hover:scale-[1.01] transition-transform"
+                                  />
+                                </div>
+                              ) : (
+                                <a
+                                  href={msg.attachment.dataUrl || "#"}
+                                  download={msg.attachment.name}
+                                  className="flex items-center gap-3 p-3 rounded-2xl bg-black/20 hover:bg-black/30 border border-white/10 transition-colors text-xs group"
+                                >
+                                  <div className="p-2.5 rounded-xl bg-blue-500/20 text-blue-400 group-hover:scale-110 transition-transform">
+                                    <Download className="w-4 h-4" />
+                                  </div>
+                                  <div className="truncate">
+                                    <p className="font-bold text-white truncate max-w-[200px]">{msg.attachment.name}</p>
+                                    <p className="text-[10px] opacity-60">
+                                      {msg.attachment.size ? `${(msg.attachment.size / 1024).toFixed(1)} КБ` : "Файл"} • Скачать
+                                    </p>
+                                  </div>
+                                </a>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Message Content: Voice Note */}
+                          {msg.type === "voice" ? (
+                            <div className="flex items-center gap-3 py-1 min-w-[160px]">
+                              <button
+                                onClick={() => playVoiceMessage(msg.id, msg.voiceDuration || 3, msg.attachment?.dataUrl)}
+                                className={`w-10 h-10 rounded-full flex items-center justify-center transition-transform hover:scale-105 active:scale-95 shadow-lg ${
+                                  playingVoiceId === msg.id
+                                    ? "bg-blue-600 text-white animate-pulse"
+                                    : isMe
+                                      ? "bg-white/20 text-white"
+                                      : "bg-blue-600 text-white"
+                                }`}
+                              >
+                                {playingVoiceId === msg.id ? (
+                                  <Pause className="w-5 h-5" />
+                                ) : (
+                                  <Play className="w-5 h-5 ml-0.5" />
+                                )}
+                              </button>
+                              <div className="flex flex-col gap-1 flex-1">
+                                <div className="flex items-center gap-1 h-5">
+                                  {(msg.voiceWaveform && msg.voiceWaveform.length > 0
+                                    ? msg.voiceWaveform
+                                    : [35, 70, 40, 90, 60, 100, 45, 80, 55, 95, 35, 75]
+                                  ).map((h, idx) => (
+                                    <div
+                                      key={`${msg.id}-bar-${idx}`}
+                                      style={{ height: `${Math.max(4, h * 0.22)}px` }}
+                                      className={`w-1 rounded-full transition-all ${
+                                        playingVoiceId === msg.id
+                                          ? "bg-blue-400 animate-pulse"
+                                          : isMe
+                                            ? "bg-white/70"
+                                            : "bg-blue-500/70"
+                                      }`}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="text-[10px] font-bold opacity-70">
+                                  0:{((msg.voiceDuration || 3) < 10 ? "0" : "") + (msg.voiceDuration || 3)}
+                                </span>
+                              </div>
+                            </div>
+                          ) : msg.type === "sticker" ? (
+                            <div className="py-2 text-center">
+                              <span className="text-6xl inline-block hover:scale-125 transition-transform cursor-pointer select-none">
+                                {msg.text}
+                              </span>
+                            </div>
+                          ) : (
+                            <p className={`${getFontSizeClass()} font-medium whitespace-pre-wrap break-words`}>
+                              {msg.text}
+                            </p>
+                          )}
+
+                          {/* Timestamp & Status */}
+                          <div className="flex items-center justify-end gap-2 mt-2 opacity-50">
+                            {msg.pinned && (
+                              <Pin
+                                className="w-3 h-3 text-yellow-400"
+                                title="Закреплено"
+                              />
+                            )}
+                            {msg.editedAt && (
+                              <span className="text-[9px] italic font-bold">
+                                EDT
+                              </span>
+                            )}
+                            <span className="text-[10px] font-black tracking-tighter">
+                              {msg.createdAt?.toDate()
+                                ? format(msg.createdAt.toDate(), "HH:mm")
+                                : ""}
+                            </span>
+                            {isMe && (
+                              <Check className="w-3.5 h-3.5 text-white/60" />
+                            )}
+                          </div>
+
+                          {/* Real-time Reaction Badges */}
+                          {hasReactions && (
+                            <div className="flex flex-wrap gap-1.5 mt-2.5 pt-1.5 border-t border-white/5">
+                              {Object.entries(msg.reactions || {}).map(
+                                ([emoji, val]) => {
+                                  const uids = Array.isArray(val) ? (val as string[]) : [];
+                                  if (uids.length === 0) return null;
+                                  const userReacted = profile
+                                    ? uids.includes(profile.uid)
+                                    : false;
+                                  return (
+                                    <motion.button
+                                      whileTap={{ scale: 0.9 }}
+                                      whileHover={{ scale: 1.08 }}
+                                      key={`${msg.id}-rxn-${emoji}`}
+                                      onClick={() => toggleReaction(msg, emoji)}
+                                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold transition-all border ${
+                                        userReacted
+                                          ? "bg-blue-500/25 border-blue-400 text-blue-300 ring-1 ring-blue-400/40 shadow-sm"
+                                          : "bg-white/5 hover:bg-white/10 border-white/10 text-white/80"
+                                      }`}
+                                      title={`${uids.length} ${
+                                        uids.length === 1 ? "пользователь" : "пользователей"
+                                      }`}
+                                    >
+                                      <span className="text-sm leading-none">{emoji}</span>
+                                      <span className="text-[10px]">{uids.length}</span>
+                                    </motion.button>
+                                  );
+                                },
+                              )}
+                            </div>
+                          )}
+
+                          {/* Quick Reactions & Action Toolbar (Hover / Click) */}
+                          <div
+                            className={`absolute ${
+                              isMe ? "right-0 bottom-full mb-2" : "left-0 bottom-full mb-2"
+                            } opacity-0 group-hover:opacity-100 flex items-center gap-1 p-1 rounded-2xl shadow-2xl border backdrop-blur-2xl transition-all z-20 ${
+                              profile?.theme === "light"
+                                ? "bg-white/95 border-slate-200"
+                                : "bg-[#0b1329]/95 border-white/15"
+                            }`}
                           >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                            {/* Quick Reactions Row */}
+                            <div className="flex items-center gap-0.5 pr-1 border-r border-white/10">
+                              {quickReactions.slice(0, 6).map((emoji) => (
+                                <button
+                                  key={`${msg.id}-qr-${emoji}`}
+                                  onClick={() => toggleReaction(msg, emoji)}
+                                  className="w-7 h-7 flex items-center justify-center hover:scale-125 transition-transform text-sm rounded-lg hover:bg-white/10"
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+
+                            {/* Reply */}
+                            <button
+                              onClick={() => {
+                                setReplyingTo(msg);
+                                setEditingMessage(null);
+                              }}
+                              className="p-1.5 hover:bg-white/10 rounded-xl transition-colors text-white/50 hover:text-white"
+                              title="Ответить"
+                            >
+                              <CornerUpLeft className="w-3.5 h-3.5 text-blue-400" />
+                            </button>
+
+                            {/* Pin / Unpin */}
+                            <button
+                              onClick={() => togglePinMessage(msg)}
+                              className={`p-1.5 hover:bg-white/10 rounded-xl transition-colors ${
+                                msg.pinned ? "text-yellow-400" : "text-white/50 hover:text-white"
+                              }`}
+                              title={msg.pinned ? "Открепить" : "Закрепить"}
+                            >
+                              <Pin className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Forward */}
+                            <button
+                              onClick={() => setForwardingMessage(msg)}
+                              className="p-1.5 hover:bg-white/10 rounded-xl transition-colors text-white/50 hover:text-white"
+                              title="Переслать"
+                            >
+                              <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+                            </button>
+
+                            {/* Edit (if sender) */}
+                            {isMe && (
+                              <button
+                                onClick={() => {
+                                  setEditingMessage(msg);
+                                  setInputText(msg.text);
+                                  setReplyingTo(null);
+                                }}
+                                className="p-1.5 hover:bg-white/10 rounded-xl transition-colors text-white/50 hover:text-white"
+                                title="Изменить"
+                              >
+                                <Edit2 className="w-3.5 h-3.5 text-amber-400" />
+                              </button>
+                            )}
+
+                            {/* Delete */}
+                            {(isMe || isAdmin || profile?.id === 1) && (
+                              <button
+                                onClick={() => {
+                                  deleteDoc(
+                                    doc(
+                                      db,
+                                      `chats/${activeChat.id}/messages`,
+                                      msg.id,
+                                    ),
+                                  );
+                                }}
+                                className="p-1.5 hover:bg-red-500/10 rounded-xl transition-colors text-red-500/50 hover:text-red-500"
+                                title="Удалить"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    </motion.div>
-                  );
-                })}
+                      </motion.div>
+                    );
+                  })}
               </AnimatePresence>
               <div ref={scrollRef} />
             </div>
@@ -1001,6 +2154,7 @@ export default function Messenger() {
             {/* Input Area */}
             <div className={`p-6 z-20 ${styles.bg}`}>
               <div className="max-w-5xl mx-auto flex flex-col gap-3">
+                {/* Editing Message Banner */}
                 <AnimatePresence>
                   {editingMessage && (
                     <motion.div
@@ -1015,7 +2169,7 @@ export default function Messenger() {
                         </div>
                         <div className="flex flex-col">
                           <span className="font-black uppercase tracking-widest text-[10px]">
-                            Editing Message
+                            Редактирование сообщения
                           </span>
                           <span className="opacity-70 truncate max-w-[200px] md:max-w-[500px] font-medium">
                             {editingMessage.text}
@@ -1035,69 +2189,330 @@ export default function Messenger() {
                   )}
                 </AnimatePresence>
 
-                <div
-                  className={`flex items-center gap-3 border border-white/10 rounded-[32px] p-2 pr-5 transition-all focus-within:ring-2 focus-within:ring-blue-500/40 group relative ${styles.input}`}
-                >
-                  <div className="relative">
-                    <button
-                      onClick={() => setShowEmoji(!showEmoji)}
-                      title="Смайлы"
-                      className={`p-3 rounded-full transition-all ${showEmoji ? "bg-blue-600 text-white" : "hover:bg-white/5 opacity-40 hover:opacity-100"}`}
+                {/* Reply Message Banner */}
+                <AnimatePresence>
+                  {replyingTo && (
+                    <motion.div
+                      initial={{ y: 20, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      exit={{ y: 20, opacity: 0 }}
+                      className="flex items-center justify-between bg-blue-500/10 p-3.5 rounded-2xl text-xs text-blue-400 border border-blue-500/20 backdrop-blur-md"
                     >
-                      <EmojiIcon className="w-6 h-6" />
-                    </button>
+                      <div className="flex items-center gap-3">
+                        <div className="bg-blue-600 p-1.5 rounded-lg text-white shadow-md">
+                          <CornerUpLeft className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="font-black uppercase tracking-widest text-[9px] text-blue-400">
+                            Ответ для {replyingTo.senderName}
+                          </span>
+                          <span className="opacity-70 truncate max-w-[200px] md:max-w-[450px] font-medium text-xs">
+                            {replyingTo.text}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setReplyingTo(null)}
+                        className="p-1.5 hover:bg-white/10 rounded-full transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
 
-                    <AnimatePresence>
-                      {showEmoji && (
-                        <motion.div
-                          initial={{ opacity: 0, y: -10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -10 }}
-                          className={`absolute bottom-full left-0 mb-4 grid grid-cols-5 gap-1 p-3 rounded-2xl shadow-2xl border backdrop-blur-xl z-50 ${profile?.theme === "light" ? "bg-white/95 border-slate-200" : "bg-[#1e293b]/95 border-white/10"}`}
-                        >
-                          {emojis.map((e) => (
-                            <button
-                              key={e}
-                              onClick={() => addEmoji(e)}
-                              className={`text-2xl p-2 rounded-xl transition-all hover:scale-125 ${profile?.theme === "light" ? "hover:bg-slate-100" : "hover:bg-white/10"}`}
-                            >
-                              {e}
-                            </button>
+                {/* Voice Recording Bar */}
+                <AnimatePresence>
+                  {isRecordingVoice && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.95 }}
+                      className="flex items-center justify-between bg-rose-500/15 border border-rose-500/30 p-4 rounded-3xl backdrop-blur-xl"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="w-3.5 h-3.5 bg-rose-500 rounded-full animate-ping" />
+                        <span className="text-xs font-black uppercase tracking-widest text-rose-400">
+                          Запись аудио... 0:0{voiceRecordSeconds}
+                        </span>
+                        <div className="flex items-center gap-1 ml-3">
+                          {[30, 80, 50, 100, 40, 70, 90, 60].map((h, i) => (
+                            <div
+                              key={i}
+                              style={{ height: `${h * 0.18}px` }}
+                              className="w-1 bg-rose-500 rounded-full animate-pulse"
+                            />
                           ))}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={cancelVoiceRecording}
+                          className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-white/10 hover:bg-white/20 text-white/80 transition-all"
+                        >
+                          Отмена
+                        </button>
+                        <button
+                          onClick={finishVoiceRecording}
+                          className="px-5 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30 transition-all"
+                        >
+                          Отправить
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Attached File Preview Bar */}
+                <AnimatePresence>
+                  {attachedFile && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                      className="flex items-center justify-between p-3.5 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 backdrop-blur-2xl"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        {attachedFile.type.startsWith("image/") && attachedFile.dataUrl ? (
+                          <img
+                            src={attachedFile.dataUrl}
+                            alt={attachedFile.name}
+                            className="w-12 h-12 rounded-xl object-cover border border-cyan-500/40 shrink-0 shadow-lg"
+                          />
+                        ) : (
+                          <div className="w-11 h-11 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
+                            <AttachIcon className="w-5 h-5" />
+                          </div>
+                        )}
+                        <div className="truncate">
+                          <p className="font-bold text-white text-xs truncate max-w-sm">{attachedFile.name}</p>
+                          <p className="text-[10px] text-cyan-400 font-mono">
+                            {(attachedFile.size / 1024).toFixed(1)} КБ • Готов к отправке
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setAttachedFile(null)}
+                        className="p-2 hover:bg-white/10 rounded-full text-white/60 hover:text-white transition-colors"
+                        title="Удалить прикрепленный файл"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Ban Status Notice or Input Bar */}
+                {(activeChat.type === "direct" && partnerProfile?.isBanned) || profile?.isBanned ? (
+                  <div className="flex items-center justify-center gap-3 py-5 px-6 rounded-3xl bg-rose-500/10 border border-rose-500/30 text-rose-400 backdrop-blur-2xl shadow-xl">
+                    <Ban className="w-6 h-6 shrink-0 text-rose-500" />
+                    <div className="text-left">
+                      <p className="text-sm font-bold">
+                        {activeChat.type === "direct" && partnerProfile?.isBanned
+                          ? "Пользователь заблокирован администрацией"
+                          : "Ваш аккаунт заблокирован"}
+                      </p>
+                      <p className="text-xs text-rose-300/80">
+                        Отправка сообщений, файлов и голосовых заметок недоступна.
+                      </p>
+                    </div>
                   </div>
-
-                  <button
-                    onClick={handleFileUpload}
-                    title="Прикрепить"
-                    className="p-3 hover:bg-white/5 rounded-full transition-colors text-blue-500"
+                ) : (
+                  /* Input Bar */
+                  <div
+                    className={`flex items-center gap-3 border border-white/10 rounded-[32px] p-2 pr-5 transition-all focus-within:ring-2 focus-within:ring-blue-500/40 group relative ${styles.input}`}
                   >
-                    <AttachIcon className="w-6 h-6" />
-                  </button>
+                    <div className="relative">
+                      <button
+                        onClick={() => setShowEmoji(!showEmoji)}
+                        title="Смайлы и стикеры"
+                        className={`p-3 rounded-full transition-all ${
+                          showEmoji
+                            ? "bg-blue-600 text-white"
+                            : "hover:bg-white/5 opacity-40 hover:opacity-100"
+                        }`}
+                      >
+                        <EmojiIcon className="w-6 h-6" />
+                      </button>
 
-                  <input
-                    type="text"
-                    placeholder={isMuted ? "You are muted" : t.writeMessage}
-                    disabled={isMuted}
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                    className="flex-1 focus:outline-none text-[16px] bg-transparent py-3 px-2 font-medium"
-                  />
+                      <AnimatePresence>
+                        {showEmoji && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className={`absolute bottom-full left-0 mb-4 w-72 rounded-3xl shadow-2xl border backdrop-blur-2xl z-50 overflow-hidden ${
+                              profile?.theme === "light"
+                                ? "bg-white/95 border-slate-200"
+                                : "bg-[#0f172a]/95 border-white/10"
+                            }`}
+                          >
+                            {/* Tabs */}
+                            <div className="flex border-b border-white/10 p-1.5 gap-1 bg-black/10">
+                              <button
+                                onClick={() => setEmojiTab("emojis")}
+                                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-wider rounded-xl transition-all ${
+                                  emojiTab === "emojis"
+                                    ? "bg-blue-600 text-white shadow-md"
+                                    : "opacity-50 hover:opacity-100"
+                                }`}
+                              >
+                                Смайлы
+                              </button>
+                              <button
+                                onClick={() => setEmojiTab("stickers")}
+                                className={`flex-1 py-1.5 text-xs font-black uppercase tracking-wider rounded-xl transition-all ${
+                                  emojiTab === "stickers"
+                                    ? "bg-blue-600 text-white shadow-md"
+                                    : "opacity-50 hover:opacity-100"
+                                }`}
+                              >
+                                Стикеры
+                              </button>
+                            </div>
 
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                    onClick={sendMessage}
-                    className={`p-3.5 rounded-full text-white shadow-2xl transition-all ${inputText.trim() ? "bg-gradient-to-tr from-blue-600 to-indigo-600 shadow-blue-500/50 opacity-100" : "bg-slate-700 opacity-20 cursor-default"}`}
-                  >
-                    <SendIcon
-                      className={`w-6 h-6 transition-transform ${inputText.trim() ? "translate-x-0.5 -translate-y-0.5 rotate-[-15deg]" : ""}`}
-                    />
-                  </motion.button>
-                </div>
+                            {emojiTab === "emojis" ? (
+                              <div className="grid grid-cols-5 gap-1 p-3 max-h-56 overflow-y-auto custom-scrollbar">
+                                {emojis.map((e) => (
+                                  <button
+                                    key={e}
+                                    onClick={() => addEmoji(e)}
+                                    className={`text-2xl p-2 rounded-xl transition-all hover:scale-125 ${
+                                      profile?.theme === "light"
+                                        ? "hover:bg-slate-100"
+                                        : "hover:bg-white/10"
+                                    }`}
+                                  >
+                                    {e}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-3 gap-2 p-3 max-h-56 overflow-y-auto custom-scrollbar">
+                                {stickerPack.map((stk) => (
+                                  <button
+                                    key={stk.label}
+                                    onClick={() => sendSticker(stk.emoji, stk.label)}
+                                    className="flex flex-col items-center gap-1 p-2.5 rounded-2xl bg-white/5 hover:bg-white/10 hover:scale-105 active:scale-95 transition-all text-center group"
+                                    title={stk.label}
+                                  >
+                                    <span className="text-3xl group-hover:scale-115 transition-transform">
+                                      {stk.emoji}
+                                    </span>
+                                    <span className="text-[9px] font-bold opacity-60 truncate w-full">
+                                      {stk.label}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    {isRecordingVoice ? (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.96 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="flex-1 flex items-center justify-between gap-3 px-2 py-1"
+                      >
+                        <div className="flex items-center gap-2.5 shrink-0">
+                          <span className="w-3.5 h-3.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.9)]" />
+                          <span className="font-mono text-sm font-black text-red-400 tabular-nums">
+                            00:{voiceRecordSeconds < 10 ? `0${voiceRecordSeconds}` : voiceRecordSeconds}
+                          </span>
+                          <span className="text-[10px] text-white/40 uppercase font-black tracking-wider hidden sm:inline">
+                            / 01:00
+                          </span>
+                        </div>
+
+                        {/* Live Waveform Visualizer from Microphone */}
+                        <div className="flex items-center gap-1 h-8 flex-1 max-w-[260px] px-2 justify-center">
+                          {liveWaveform.map((h, i) => (
+                            <div
+                              key={`live-wave-${i}`}
+                              style={{ height: `${Math.max(10, h * 0.32)}px` }}
+                              className="w-1.5 bg-gradient-to-t from-blue-600 to-cyan-400 rounded-full transition-all duration-75"
+                            />
+                          ))}
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {/* Cancel button */}
+                          <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.9 }}
+                            type="button"
+                            onClick={cancelVoiceRecording}
+                            title="Отменить запись (нажмите или смахните)"
+                            className="px-3.5 py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 text-xs font-bold transition-all flex items-center gap-1.5"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span className="hidden sm:inline">Отмена</span>
+                          </motion.button>
+
+                          {/* Send button */}
+                          <motion.button
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                            type="button"
+                            onClick={finishVoiceRecording}
+                            title="Отправить голосовое сообщение"
+                            className="p-3 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-xl shadow-blue-500/40 transition-all flex items-center justify-center"
+                          >
+                            <SendIcon className="w-5 h-5 translate-x-0.5 -translate-y-0.5 rotate-[-15deg]" />
+                          </motion.button>
+                        </div>
+                      </motion.div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={handleFileUpload}
+                          title="Прикрепить файл"
+                          className="p-3 hover:bg-white/5 rounded-full transition-colors text-blue-500"
+                        >
+                          <AttachIcon className="w-6 h-6" />
+                        </button>
+
+                        <input
+                          type="text"
+                          placeholder={isMuted ? "Вы замучены" : t.writeMessage}
+                          disabled={isMuted}
+                          value={inputText}
+                          onChange={(e) => setInputText(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+                          className="flex-1 focus:outline-none text-[16px] bg-transparent py-3 px-2 font-medium"
+                        />
+
+                        {/* Mic / Voice Note Button */}
+                        {!inputText.trim() && !attachedFile && (
+                          <motion.button
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                            onClick={startVoiceRecording}
+                            title="Записать голосовое сообщение (до 60 сек)"
+                            className="p-3.5 rounded-full text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-all"
+                          >
+                            <Mic className="w-6 h-6" />
+                          </motion.button>
+                        )}
+
+                        {/* Send Button */}
+                        {(inputText.trim() || attachedFile) && (
+                          <motion.button
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                            onClick={sendMessage}
+                            className="p-3.5 rounded-full text-white shadow-2xl transition-all bg-gradient-to-tr from-blue-600 to-indigo-600 shadow-blue-500/50 opacity-100"
+                          >
+                            <SendIcon className="w-6 h-6 transition-transform translate-x-0.5 -translate-y-0.5 rotate-[-15deg]" />
+                          </motion.button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -1123,22 +2538,9 @@ export default function Messenger() {
             <motion.div
               initial={{ scale: 0.8, opacity: 0, rotate: -5 }}
               animate={{ scale: 1, opacity: 1, rotate: 0 }}
-              className="bg-white/5 p-16 rounded-[5rem] mb-12 backdrop-blur-3xl border border-white/10 shadow-[0_0_100px_rgba(37,99,235,0.15)] relative z-10 group"
+              className="p-8 rounded-[4rem] mb-6 backdrop-blur-3xl border border-white/10 shadow-[0_0_100px_rgba(37,99,235,0.15)] relative z-10 group flex items-center justify-center"
             >
-              <div className="relative">
-                <div
-                  className={`absolute inset-0 blur-3xl opacity-30 group-hover:opacity-50 transition-opacity animate-pulse ${
-                    profile?.theme === "cyber" ? "bg-[#00ff41]" : "bg-blue-500"
-                  }`}
-                />
-                <MessageCircle
-                  className={`w-24 h-24 relative transition-transform group-hover:scale-110 ${
-                    profile?.theme === "cyber"
-                      ? "text-[#00ff41]"
-                      : "text-blue-500"
-                  }`}
-                />
-              </div>
+              <ThreeHoloOrb size={220} interactive={true} />
             </motion.div>
 
             <div className="relative z-10 space-y-2">
@@ -1195,11 +2597,28 @@ export default function Messenger() {
 
       {/* Modals */}
       <AnimatePresence>
+        {forwardingMessage && (
+          <ForwardModal
+            message={forwardingMessage}
+            chats={chats}
+            profile={profile}
+            onClose={() => setForwardingMessage(null)}
+            onForward={forwardMessageToChat}
+            onOpenSaved={openSavedMessages}
+          />
+        )}
         {showSettings && (
           <SettingsModal
             profile={profile}
             onClose={() => setShowSettings(false)}
+            onOpenSpoonGame={() => {
+              setShowSettings(false);
+              setShowSpoonGame(true);
+            }}
           />
+        )}
+        {showSpoonGame && (
+          <SpoonParkourGame onClose={() => setShowSpoonGame(false)} />
         )}
         {showUserInfo && (
           <UserInfoModal
@@ -1581,9 +3000,11 @@ function UserSearchModal({
 function SettingsModal({
   profile,
   onClose,
+  onOpenSpoonGame,
 }: {
   profile: UserProfile | null;
   onClose: () => void;
+  onOpenSpoonGame?: () => void;
 }) {
   const lang: Language = profile?.language || "ru";
   const t = translations[lang];
@@ -1592,9 +3013,19 @@ function SettingsModal({
   const [handle, setHandle] = useState(profile?.handle || "");
   const [bio, setBio] = useState(profile?.bio || "");
   const [localTheme, setLocalTheme] = useState<Theme>(
-    profile?.theme || "light",
+    profile?.theme || "oled",
   );
   const [localLang, setLocalLang] = useState<Language>(lang);
+  const [localFontSize, setLocalFontSize] = useState<"small" | "normal" | "large">(
+    profile?.fontSize || "normal",
+  );
+  const [localBubbleStyle, setLocalBubbleStyle] = useState<"modern" | "rounded" | "sharp">(
+    profile?.bubbleStyle || "modern",
+  );
+  const [localSoundEnabled, setLocalSoundEnabled] = useState<boolean>(
+    profile?.soundEnabled !== false,
+  );
+  const [catClicks, setCatClicks] = useState(0);
   const [error, setError] = useState("");
 
   const [is2FASubModal, setIs2FASubModal] = useState(false);
@@ -1655,6 +3086,9 @@ function SettingsModal({
       bio,
       theme: localTheme,
       language: localLang,
+      fontSize: localFontSize,
+      bubbleStyle: localBubbleStyle,
+      soundEnabled: localSoundEnabled,
     };
 
     if (handle !== profile.handle) {
@@ -1843,50 +3277,163 @@ function SettingsModal({
             </div>
           </div>
 
+          {/* 6 Custom Themes */}
           <div>
             <label className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2 block">
-              {t.visualInterface}
+              Темы оформления (6 тем)
             </label>
             <div className="grid grid-cols-2 gap-2">
               {[
                 {
-                  id: "light",
-                  name: t.themes.light,
-                  icon: <Sun className="w-4 h-4" />,
-                },
-                {
-                  id: "dark",
-                  name: t.themes.dark,
-                  icon: <Moon className="w-4 h-4" />,
-                },
-                {
                   id: "oled",
-                  name: t.themes.oled,
-                  icon: <Monitor className="w-4 h-4" />,
+                  name: "Midnight OLED",
+                  desc: "Глубокий черный",
+                  color: "bg-black border-cyan-500/30 text-white",
+                  icon: <Monitor className="w-4 h-4 text-cyan-400" />,
+                },
+                {
+                  id: "emerald",
+                  name: "Изумруд",
+                  desc: "Нефритовый лес",
+                  color: "bg-[#04140e] border-emerald-500/30 text-emerald-300",
+                  icon: <Sparkles className="w-4 h-4 text-emerald-400" />,
                 },
                 {
                   id: "cyber",
-                  name: t.themes.cyber,
-                  icon: <Zap className="w-4 h-4" />,
+                  name: "Неон",
+                  desc: "Кибернетический",
+                  color: "bg-[#040810] border-cyan-500/30 text-cyan-300",
+                  icon: <Zap className="w-4 h-4 text-cyan-400" />,
                 },
                 {
                   id: "sunset",
-                  name: t.themes.sunset,
-                  icon: <Heart className="w-4 h-4" />,
+                  name: "Закат",
+                  desc: "Пурпурно-алый",
+                  color: "bg-[#140818] border-rose-500/30 text-rose-300",
+                  icon: <Heart className="w-4 h-4 text-rose-400" />,
+                },
+                {
+                  id: "nordic",
+                  name: "Нордик",
+                  desc: "Арктический лед",
+                  color: "bg-[#09111e] border-sky-500/30 text-sky-300",
+                  icon: <Moon className="w-4 h-4 text-sky-400" />,
+                },
+                {
+                  id: "telegram",
+                  name: "Telegram",
+                  desc: "Классика ТГ",
+                  color: "bg-[#0e1621] border-[#223345] text-blue-300",
+                  icon: <MessageCircle className="w-4 h-4 text-blue-400" />,
+                },
+                {
+                  id: "light",
+                  name: "Светлая",
+                  desc: "Чистый минимализм",
+                  color: "bg-slate-100 border-slate-300 text-slate-800",
+                  icon: <Sun className="w-4 h-4 text-amber-500" />,
                 },
               ].map((tInfo) => (
                 <button
                   key={tInfo.id}
+                  type="button"
                   onClick={() => setLocalTheme(tInfo.id as Theme)}
-                  className={`p-3 rounded-xl border flex items-center gap-3 transition-all ${localTheme === tInfo.id ? "border-blue-500 bg-blue-500/10 text-blue-400 font-black" : "border-white/5 hover:bg-white/5 opacity-60"}`}
+                  className={`p-3 rounded-2xl border flex flex-col items-start gap-1 transition-all ${
+                    localTheme === tInfo.id
+                      ? "border-blue-500 ring-2 ring-blue-500/40 bg-blue-500/15"
+                      : "border-white/5 hover:bg-white/5 opacity-70 hover:opacity-100"
+                  }`}
                 >
-                  {tInfo.icon}
-                  <span className="text-[10px] uppercase tracking-widest leading-none">
-                    {tInfo.name}
+                  <div className="flex items-center gap-2">
+                    {tInfo.icon}
+                    <span className="text-xs font-bold leading-tight">
+                      {tInfo.name}
+                    </span>
+                  </div>
+                  <span className="text-[9px] opacity-60 leading-none">
+                    {tInfo.desc}
                   </span>
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Font Size Selector */}
+          <div>
+            <label className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2 block">
+              Размер текста сообщений
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: "small", label: "Мелкий (13px)" },
+                { id: "normal", label: "Стандарт (15px)" },
+                { id: "large", label: "Крупный (17px)" },
+              ].map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setLocalFontSize(f.id as any)}
+                  className={`py-2.5 px-2 rounded-xl text-xs font-bold border transition-all text-center ${
+                    localFontSize === f.id
+                      ? "border-blue-500 bg-blue-500/15 text-blue-400"
+                      : "border-white/5 hover:bg-white/5 opacity-60"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Bubble Style Selector */}
+          <div>
+            <label className="text-[10px] font-black uppercase tracking-widest opacity-40 mb-2 block">
+              Форма пузырей сообщений
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: "modern", label: "Modern" },
+                { id: "rounded", label: "Rounded" },
+                { id: "sharp", label: "Sharp" },
+              ].map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => setLocalBubbleStyle(b.id as any)}
+                  className={`py-2.5 px-2 rounded-xl text-xs font-bold border transition-all text-center ${
+                    localBubbleStyle === b.id
+                      ? "border-blue-500 bg-blue-500/15 text-blue-400"
+                      : "border-white/5 hover:bg-white/5 opacity-60"
+                  }`}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Sound Effects Toggle */}
+          <div className="p-3.5 rounded-2xl bg-white/5 border border-white/5 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-blue-500/20 text-blue-400">
+                <Volume2 className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-bold">Звуковые сигналы</p>
+                <p className="text-[10px] opacity-60">Звук при отправке сообщений</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLocalSoundEnabled(!localSoundEnabled)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+                localSoundEnabled
+                  ? "bg-blue-600 text-white shadow-md shadow-blue-600/30"
+                  : "bg-white/10 text-white/50"
+              }`}
+            >
+              {localSoundEnabled ? "Вкл" : "Выкл"}
+            </button>
           </div>
           <button
             onClick={save}
@@ -1894,6 +3441,57 @@ function SettingsModal({
           >
             {t.save}
           </button>
+
+          {/* Cat Easter Egg for 3D Spoon Parkour Game */}
+          <div className="pt-4 pb-1 flex flex-col items-center justify-center select-none border-t border-white/5 mt-5">
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.15 }}
+              whileTap={{ scale: 0.85 }}
+              onClick={() => {
+                try {
+                  const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+                  if (AudioCtx) {
+                    const ctx = new AudioCtx();
+                    const now = ctx.currentTime;
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(450, now);
+                    osc.frequency.exponentialRampToValueAtTime(800, now + 0.12);
+                    osc.frequency.exponentialRampToValueAtTime(500, now + 0.28);
+                    gain.gain.setValueAtTime(0.2, now);
+                    gain.gain.linearRampToValueAtTime(0.01, now + 0.28);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start(now);
+                    osc.stop(now + 0.28);
+                  }
+                } catch {}
+
+                const next = catClicks + 1;
+                setCatClicks(next);
+                if (next >= 5) {
+                  setCatClicks(0);
+                  if (onOpenSpoonGame) {
+                    onOpenSpoonGame();
+                  }
+                }
+              }}
+              className="group relative flex items-center justify-center w-14 h-14 rounded-2xl bg-white/5 hover:bg-amber-500/20 border border-white/10 hover:border-amber-500/40 transition-all cursor-pointer shadow-lg"
+              title="Мяу? Нажми 5 раз!"
+            >
+              <span className="text-3xl group-hover:scale-125 transition-transform duration-200">🐱</span>
+              {catClicks > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-black shadow-lg animate-bounce">
+                  {catClicks}/5
+                </span>
+              )}
+            </motion.button>
+            <p className="text-[10px] text-white/50 mt-2 font-bold tracking-wider uppercase">
+              {catClicks === 0 ? "Секретный котик Nova" : `Котик доволен: ${catClicks} из 5 (нажми ещё ${5 - catClicks})`}
+            </p>
+          </div>
         </div>
 
         <AnimatePresence>
@@ -2281,6 +3879,133 @@ function GroupInfoModal({
   );
 }
 
+function ForwardModal({
+  message,
+  chats,
+  profile,
+  onClose,
+  onForward,
+  onOpenSaved,
+}: {
+  message: Message;
+  chats: Chat[];
+  profile: UserProfile | null;
+  onClose: () => void;
+  onForward: (chatId: string) => void;
+  onOpenSaved: () => void;
+}) {
+  const isLight = profile?.theme === "light";
+  const [queryText, setQueryText] = useState("");
+
+  const filteredChats = chats.filter((c) =>
+    (c.name || "Чат").toLowerCase().includes(queryText.toLowerCase()),
+  );
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 z-[90] bg-black/75 backdrop-blur-2xl flex items-center justify-center p-4"
+    >
+      <motion.div
+        initial={{ scale: 0.9, y: 20 }}
+        animate={{ scale: 1, y: 0 }}
+        className={`w-full max-w-md rounded-[2.5rem] p-6 shadow-2xl border ${
+          isLight
+            ? "bg-white text-slate-900 border-slate-200"
+            : "bg-[#0f172a] text-white border-white/10"
+        }`}
+      >
+        <div className="flex justify-between items-center mb-5">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-2xl bg-blue-600/20 text-blue-500">
+              <Share2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-xl font-black italic tracking-tighter uppercase">
+                Переслать сообщение
+              </h2>
+              <p className="text-[10px] opacity-50 uppercase tracking-widest font-bold">
+                Выберите получателя
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-white/10 rounded-full transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Message preview snippet */}
+        <div className="p-3 mb-4 rounded-2xl bg-black/10 dark:bg-white/5 border border-white/5 text-xs">
+          <span className="text-[10px] font-bold text-blue-400 block mb-0.5">
+            {message.senderName}:
+          </span>
+          <p className="line-clamp-2 opacity-80">{message.text}</p>
+        </div>
+
+        {/* Quick Save to Избранное */}
+        <button
+          onClick={() => {
+            if (profile) onForward(`saved_${profile.uid}`);
+          }}
+          className="w-full flex items-center gap-3 p-3 mb-3 rounded-2xl bg-yellow-500/10 border border-yellow-500/20 hover:bg-yellow-500/20 transition-all text-left"
+        >
+          <div className="p-2 rounded-xl bg-yellow-500 text-white">
+            <Bookmark className="w-4 h-4" />
+          </div>
+          <div className="flex-1">
+            <p className="text-xs font-black uppercase text-yellow-500">
+              В Избранное (Saved Messages)
+            </p>
+            <p className="text-[10px] opacity-60">Сохранить для себя</p>
+          </div>
+        </button>
+
+        {/* Search */}
+        <input
+          type="text"
+          placeholder="Поиск диалогов..."
+          value={queryText}
+          onChange={(e) => setQueryText(e.target.value)}
+          className={`w-full p-3 rounded-2xl text-xs mb-3 outline-none ring-2 ring-transparent focus:ring-blue-500 transition-all ${
+            isLight ? "bg-slate-100" : "bg-white/5"
+          }`}
+        />
+
+        {/* Chat list */}
+        <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+          {filteredChats.map((c, cIdx) => (
+            <button
+              key={`fwd-chat-${c.id || cIdx}`}
+              onClick={() => onForward(c.id)}
+              className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-blue-600/10 hover:border-blue-500/30 border border-transparent transition-all text-left group"
+            >
+              <img
+                src={c.avatarURL || `https://api.dicebear.com/7.x/initials/svg?seed=${c.name}`}
+                className="w-10 h-10 rounded-xl object-cover"
+                alt=""
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-bold truncate group-hover:text-blue-400">
+                  {c.name || "Диалог"}
+                </p>
+                <p className="text-[10px] opacity-50 truncate">
+                  {c.lastMessage || "Нажмите для отправки"}
+                </p>
+              </div>
+              <SendIcon className="w-4 h-4 opacity-30 group-hover:opacity-100 group-hover:text-blue-500 transition-all" />
+            </button>
+          ))}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 function CreatorPanel({
   profile,
   onClose,
@@ -2292,54 +4017,107 @@ function CreatorPanel({
 }) {
   const isLight = profile?.theme === "light";
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState<"all" | "admin" | "user" | "banned">("all");
+  const [confirmDeleteUser, setConfirmDeleteUser] = useState<UserProfile | null>(null);
+  const [confirmRevokeUser, setConfirmRevokeUser] = useState<UserProfile | null>(null);
+  const [editingIdUser, setEditingIdUser] = useState<UserProfile | null>(null);
+  const [customIdInput, setCustomIdInput] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  const promoteUser = async (user: UserProfile) => {
-    const newRole = user.role === "admin" ? "user" : "admin";
+  useEffect(() => {
+    const unsub = onSnapshot(
+      query(collection(db, "users"), limit(100)),
+      (snap) => {
+        setUsers(snap.docs.map((d) => d.data() as UserProfile));
+        setLoading(false);
+      },
+      (err) => {
+        console.error("CreatorPanel error:", err);
+        setLoading(false);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // "Снести админку" or promote
+  const handleToggleAdmin = async (targetUser: UserProfile) => {
+    const isCurrentlyAdmin = targetUser.role === "admin";
+    const newRole = isCurrentlyAdmin ? "user" : "admin";
     try {
-      await updateDoc(doc(db, "users", user.uid), { role: newRole });
+      await updateDoc(doc(db, "users", targetUser.uid), { role: newRole });
       addNotification(
-        `Роль ${user.displayName} изменена на ${newRole}`,
-        "success",
+        isCurrentlyAdmin
+          ? `Админка снесена с ${targetUser.displayName}`
+          : `${targetUser.displayName} назначен администратором`,
+        "success"
       );
+      setConfirmRevokeUser(null);
     } catch (e) {
-      addNotification("Ошибка при смене роли", "error");
+      console.error(e);
+      addNotification("Ошибка смены роли", "error");
     }
   };
 
-  const deleteAccount = async (user: UserProfile) => {
-    if (
-      !window.confirm(
-        `ВНИМАНИЕ: Вы действительно хотите КОРРЕКТНО удалить аккаунт ${user.displayName}? ID ${user.id} будет возвращен в пул доступных.`,
-      )
-    )
-      return;
+  // "Удаление аккаунта" with recycling numeric ID
+  const handleDeleteAccount = async (targetUser: UserProfile) => {
     try {
       const configRef = doc(db, "system", "config");
       const configSnap = await getDoc(configRef);
       const availableIds = configSnap.data()?.availableIds || [];
 
-      await updateDoc(configRef, {
-        availableIds: [...availableIds, user.id].sort((a, b) => a - b),
-      });
-      await deleteDoc(doc(db, "users", user.uid));
-      addNotification(`Аккаунт удален, ID ${user.id} освобожден`, "success");
+      if (targetUser.id && targetUser.id > 1) {
+        await updateDoc(configRef, {
+          availableIds: [...new Set([...availableIds, targetUser.id])].sort((a, b) => a - b),
+        });
+      }
+      await deleteDoc(doc(db, "users", targetUser.uid));
+      setUsers((prev) => prev.filter((u) => u.uid !== targetUser.uid));
+      addNotification(
+        `Аккаунт ${targetUser.displayName} удален, ID #${targetUser.id} освобожден`,
+        "success"
+      );
+      setConfirmDeleteUser(null);
     } catch (e) {
-      addNotification("Ошибка при удалении", "error");
+      console.error(e);
+      addNotification("Ошибка при удалении аккаунта", "error");
     }
   };
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const fetchUsers = async () => {
-    let q = query(collection(db, "users"), limit(5));
-    if (searchQuery) {
-      const cleanHandle = searchQuery.startsWith("@")
-        ? searchQuery.slice(1).toLowerCase()
-        : searchQuery.toLowerCase();
-      q = query(collection(db, "users"), where("handle", "==", cleanHandle));
+  // Save new custom numeric ID
+  const handleSaveCustomId = async () => {
+    if (!editingIdUser) return;
+    const parsed = parseInt(customIdInput, 10);
+    if (isNaN(parsed) || parsed < 1) {
+      addNotification("Введите положительное число ID", "error");
+      return;
     }
-    const snap = await getDocs(q);
-    setUsers(snap.docs.map((d) => d.data() as UserProfile));
+    try {
+      await updateDoc(doc(db, "users", editingIdUser.uid), { id: parsed });
+      addNotification(`ID для ${editingIdUser.displayName} изменен на #${parsed}`, "success");
+      setEditingIdUser(null);
+      setCustomIdInput("");
+    } catch (e) {
+      console.error(e);
+      addNotification("Ошибка при изменении ID", "error");
+    }
   };
+
+  const filteredUsers = users.filter((u) => {
+    const q = searchQuery.toLowerCase();
+    const matchesSearch =
+      !searchQuery ||
+      u.displayName?.toLowerCase().includes(q) ||
+      u.handle?.toLowerCase().includes(q) ||
+      u.email?.toLowerCase().includes(q) ||
+      String(u.id).includes(q);
+
+    if (!matchesSearch) return false;
+    if (roleFilter === "admin") return u.role === "admin";
+    if (roleFilter === "user") return u.role === "user" || !u.role;
+    if (roleFilter === "banned") return u.isBanned === true;
+    return true;
+  });
 
   return (
     <motion.div
@@ -2349,91 +4127,348 @@ function CreatorPanel({
       className="absolute inset-0 z-[100] bg-black/95 backdrop-blur-3xl flex items-center justify-center p-4"
     >
       <motion.div
-        initial={{ y: 50 }}
-        animate={{ y: 0 }}
-        className={`w-full max-w-5xl h-[85vh] overflow-hidden flex flex-col rounded-[3rem] shadow-2xl border ${isLight ? "bg-white border-slate-200" : "bg-[#0f172a] border-white/10"}`}
+        initial={{ y: 50, scale: 0.95 }}
+        animate={{ y: 0, scale: 1 }}
+        className={`w-full max-w-5xl h-[85vh] overflow-hidden flex flex-col rounded-[3rem] shadow-2xl border ${
+          isLight ? "bg-white border-slate-200" : "bg-[#0f172a] border-white/10"
+        }`}
       >
+        {/* Header */}
         <div className="p-8 border-b border-white/5 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-4">
-            <div className="bg-yellow-500 p-3 rounded-2xl shadow-xl shadow-yellow-500/20">
+            <div className="bg-yellow-500 p-3.5 rounded-2xl shadow-xl shadow-yellow-500/25">
               <UserCog className="w-8 h-8 text-white" />
             </div>
             <div>
-              <h2 className="text-4xl font-black italic tracking-tighter uppercase">
+              <h2 className="text-3xl font-black italic tracking-tighter uppercase">
                 Панель Создателя
               </h2>
-              <p className="text-yellow-500 text-[10px] font-black uppercase tracking-[0.5em]">
-                Supreme Authorized Access
+              <p className="text-yellow-500 text-[10px] font-black uppercase tracking-[0.4em]">
+                Supreme Access • Управление ролями, ID и аккаунтами
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-3 hover:bg-white/5 rounded-full"
+            className="p-3 hover:bg-white/10 rounded-full transition-colors"
           >
-            <X className="w-8 h-8" />
+            <X className="w-7 h-7" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-hidden flex flex-col items-center">
-          {/* Management */}
-          <div className="w-full max-w-2xl p-8 overflow-y-auto custom-scrollbar">
-            <h3 className="text-xl font-black uppercase italic mb-6 text-blue-500">
-              Управление ролями и ID
-            </h3>
-            <div className="flex gap-2 mb-8">
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+          {/* Controls: Search & Filter Tabs */}
+          <div className="flex flex-col md:flex-row gap-4 mb-6">
+            <div className="relative flex-1">
+              <SearchIcon className="w-5 h-5 absolute left-4 top-1/2 -translate-y-1/2 opacity-40" />
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Поиск по handle..."
-                className={`flex-1 p-4 rounded-2xl outline-none ring-2 ring-transparent focus:ring-blue-500 transition-all ${isLight ? "bg-slate-50 border" : "bg-white/5 text-white"}`}
+                placeholder="Поиск по нику, @handle, ID или email..."
+                className={`w-full pl-12 pr-4 py-3.5 rounded-2xl outline-none ring-2 ring-transparent focus:ring-yellow-500 transition-all font-medium text-sm ${
+                  isLight ? "bg-slate-100" : "bg-white/5 text-white"
+                }`}
               />
-              <button
-                onClick={fetchUsers}
-                className="bg-blue-600 text-white px-6 rounded-2xl font-black uppercase tracking-widest text-xs"
-              >
-                Найти
-              </button>
             </div>
-
-            <div className="space-y-4">
-              {users.map((u) => (
-                <div
-                  key={u.uid}
-                  className={`p-4 rounded-3xl border ${isLight ? "bg-slate-50 border-slate-200" : "bg-white/5 border-white/10"} flex items-center justify-between`}
+            <div className="flex gap-1.5 p-1 rounded-2xl bg-black/20 dark:bg-white/5 border border-white/5 self-start">
+              {(
+                [
+                  { id: "all", label: `Все (${users.length})` },
+                  { id: "admin", label: `Админы (${users.filter((u) => u.role === "admin").length})` },
+                  { id: "user", label: "Юзеры" },
+                  { id: "banned", label: "Бан" },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setRoleFilter(tab.id)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+                    roleFilter === tab.id
+                      ? "bg-yellow-500 text-slate-950 font-black shadow-md"
+                      : "opacity-60 hover:opacity-100"
+                  }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={u.photoURL}
-                      className="w-12 h-12 rounded-xl"
-                      alt=""
-                    />
-                    <div>
-                      <p className="font-bold">{u.displayName}</p>
-                      <p className="text-[10px] opacity-40 uppercase tracking-widest">
-                        ID: {u.id} | {u.role || "user"}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => promoteUser(u)}
-                      className={`p-2 rounded-xl text-[10px] font-black uppercase transition-all ${u.role === "admin" ? "bg-orange-500 text-white" : "bg-blue-500/20 text-blue-500"}`}
-                    >
-                      {u.role === "admin" ? "Revoke Admin" : "Make Admin"}
-                    </button>
-                    <button
-                      onClick={() => deleteAccount(u)}
-                      className="p-2 bg-red-600/20 text-red-500 rounded-xl text-xs"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
+                  {tab.label}
+                </button>
               ))}
             </div>
           </div>
+
+          {/* User List */}
+          {loading ? (
+            <div className="flex justify-center py-20">
+              <div className="w-8 h-8 border-3 border-yellow-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : filteredUsers.length === 0 ? (
+            <div className="text-center py-20 opacity-40 font-bold uppercase tracking-widest text-xs">
+              Пользователи не найдены
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredUsers.map((u) => {
+                const isAdminUser = u.role === "admin";
+                const isCreatorUser = u.role === "creator" || u.id === 1;
+
+                return (
+                  <div
+                    key={u.uid}
+                    className={`p-5 rounded-3xl border transition-all flex flex-col justify-between gap-4 ${
+                      isLight
+                        ? "bg-slate-50 border-slate-200"
+                        : "bg-white/5 border-white/10 hover:border-white/20"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <img
+                          src={u.photoURL}
+                          className="w-14 h-14 rounded-2xl object-cover shadow-lg shrink-0"
+                          alt=""
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-black text-base truncate">
+                              {u.displayName}
+                            </span>
+                            <VerificationBadge
+                              id={u.id}
+                              isPlus={u.isPlus}
+                              role={u.role}
+                            />
+                          </div>
+                          <p className="text-[11px] text-blue-400 font-bold">
+                            @{u.handle || "no_handle"}
+                          </p>
+                          <p className="text-[10px] opacity-40 font-mono truncate">
+                            {u.email}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <span className="bg-blue-600/20 text-blue-400 border border-blue-500/30 px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wider">
+                          ID: #{u.id}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider ${
+                            isCreatorUser
+                              ? "bg-yellow-500/20 text-yellow-500"
+                              : isAdminUser
+                                ? "bg-rose-500/20 text-rose-400"
+                                : "bg-white/10 text-white/60"
+                          }`}
+                        >
+                          {u.role || "user"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Actions Toolbar */}
+                    <div className="flex items-center gap-2 pt-2 border-t border-white/5 flex-wrap">
+                      {/* Снести админку / Выдать админку */}
+                      {!isCreatorUser && (
+                        <button
+                          onClick={() => {
+                            if (isAdminUser) {
+                              setConfirmRevokeUser(u);
+                            } else {
+                              handleToggleAdmin(u);
+                            }
+                          }}
+                          className={`flex-1 py-2 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5 ${
+                            isAdminUser
+                              ? "bg-rose-500/20 text-rose-400 border border-rose-500/30 hover:bg-rose-500 hover:text-white"
+                              : "bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600 hover:text-white"
+                          }`}
+                        >
+                          {isAdminUser ? (
+                            <>
+                              <ShieldAlert className="w-3.5 h-3.5" />
+                              <span>Снести админку</span>
+                            </>
+                          ) : (
+                            <>
+                              <ShieldCheck className="w-3.5 h-3.5" />
+                              <span>Сделать админом</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+
+                      {/* Сменить ID */}
+                      <button
+                        onClick={() => {
+                          setEditingIdUser(u);
+                          setCustomIdInput(String(u.id));
+                        }}
+                        className="py-2 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider bg-white/5 hover:bg-white/10 text-white/80 border border-white/10 transition-all flex items-center gap-1"
+                        title="Изменить ID"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        <span>ID</span>
+                      </button>
+
+                      {/* Удаление аккаунта */}
+                      {!isCreatorUser && (
+                        <button
+                          onClick={() => setConfirmDeleteUser(u)}
+                          className="py-2 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider bg-red-600/15 hover:bg-red-600 text-red-400 hover:text-white border border-red-500/20 transition-all flex items-center gap-1"
+                          title="Удалить аккаунт навсегда"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Удалить аккаунт</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+
+        {/* Modal: Confirm Revoke Admin ("Снести админку") */}
+        <AnimatePresence>
+          {confirmRevokeUser && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-center justify-center p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className={`w-full max-w-md p-6 rounded-3xl border shadow-2xl ${
+                  isLight ? "bg-white border-slate-200" : "bg-[#1e293b] border-white/10"
+                }`}
+              >
+                <div className="flex items-center gap-3 mb-4 text-rose-500">
+                  <ShieldAlert className="w-7 h-7" />
+                  <h3 className="text-xl font-black uppercase tracking-tight">
+                    Снести админку?
+                  </h3>
+                </div>
+                <p className="text-xs font-medium opacity-80 mb-6 leading-relaxed">
+                  Вы действительно хотите лишить прав администратора пользователя{" "}
+                  <strong className="text-white font-bold">{confirmRevokeUser.displayName}</strong>?
+                  Его роль будет возвращена на обычного пользователя.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setConfirmRevokeUser(null)}
+                    className="flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-wider bg-white/10 hover:bg-white/15 transition-all"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    onClick={() => handleToggleAdmin(confirmRevokeUser)}
+                    className="flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-wider bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30 transition-all"
+                  >
+                    Да, снести админку
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Modal: Confirm Delete Account ("Удаление аккаунта") */}
+        <AnimatePresence>
+          {confirmDeleteUser && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-center justify-center p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className={`w-full max-w-md p-6 rounded-3xl border shadow-2xl ${
+                  isLight ? "bg-white border-slate-200" : "bg-[#1e293b] border-white/10"
+                }`}
+              >
+                <div className="flex items-center gap-3 mb-4 text-red-500">
+                  <Trash2 className="w-7 h-7" />
+                  <h3 className="text-xl font-black uppercase tracking-tight">
+                    Удалить аккаунт навсегда?
+                  </h3>
+                </div>
+                <p className="text-xs font-medium opacity-80 mb-4 leading-relaxed">
+                  ВНИМАНИЕ: Вы действительно хотите КОРРЕКТНО удалить аккаунт{" "}
+                  <strong className="text-white font-bold">{confirmDeleteUser.displayName}</strong>?
+                </p>
+                <div className="p-3 mb-6 rounded-2xl bg-yellow-500/10 border border-yellow-500/20 text-[11px] text-yellow-400 font-semibold">
+                  Номер ID #{confirmDeleteUser.id} будет возвращен в пул свободных номеров для будущих регистраций.
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setConfirmDeleteUser(null)}
+                    className="flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-wider bg-white/10 hover:bg-white/15 transition-all"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    onClick={() => handleDeleteAccount(confirmDeleteUser)}
+                    className="flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-600/30 transition-all"
+                  >
+                    Да, удалить навсегда
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Modal: Edit Custom Numeric ID */}
+        <AnimatePresence>
+          {editingIdUser && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-50 bg-black/80 backdrop-blur-xl flex items-center justify-center p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className={`w-full max-w-sm p-6 rounded-3xl border shadow-2xl ${
+                  isLight ? "bg-white border-slate-200" : "bg-[#1e293b] border-white/10"
+                }`}
+              >
+                <h3 className="text-lg font-black uppercase tracking-tight mb-2">
+                  Сменить ID для {editingIdUser.displayName}
+                </h3>
+                <p className="text-xs opacity-60 mb-4">
+                  Текущий ID: #{editingIdUser.id}. Введите новый числовой ID:
+                </p>
+                <input
+                  type="number"
+                  autoFocus
+                  value={customIdInput}
+                  onChange={(e) => setCustomIdInput(e.target.value)}
+                  className="w-full p-3.5 rounded-2xl bg-white/5 border border-white/10 font-mono text-center text-xl font-bold mb-5 outline-none ring-2 ring-transparent focus:ring-yellow-500"
+                />
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setEditingIdUser(null)}
+                    className="flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-wider bg-white/10 hover:bg-white/15 transition-all"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    onClick={handleSaveCustomId}
+                    className="flex-1 py-3 rounded-xl text-xs font-black uppercase tracking-wider bg-yellow-500 text-slate-950 font-black shadow-lg shadow-yellow-500/20 transition-all"
+                  >
+                    Сохранить ID
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.div>
     </motion.div>
   );
@@ -2773,19 +4808,37 @@ function AdminPanel({
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [targetId, setTargetId] = useState("");
   const [banReason, setBanReason] = useState("");
-  const [banDays, setBanDays] = useState("7");
+  const [banDays, setBanDays] = useState("1");
+  const [activeTab, setActiveTab] = useState<"moderation" | "logs" | "reports">("moderation");
+  const [moderationLogs, setModerationLogs] = useState<ModerationLogEntry[]>([]);
 
   useEffect(() => {
-    const fetchUsers = async () => {
-      const q = query(collection(db, "users"), limit(50));
-      const snap = await getDocs(q);
-      setUsers(snap.docs.map((d) => d.data() as UserProfile));
-    };
-    fetchUsers();
+    const unsubUsers = onSnapshot(
+      query(collection(db, "users"), limit(100)),
+      (snap) => {
+        setUsers(snap.docs.map((d) => d.data() as UserProfile));
+      },
+      (err) => console.error("AdminPanel users error:", err)
+    );
+    return () => unsubUsers();
+  }, []);
+
+  // Real-time Moderation Logs listener
+  useEffect(() => {
+    const unsubLogs = onSnapshot(
+      query(collection(db, "moderation_logs"), orderBy("createdAt", "desc"), limit(50)),
+      (snap) => {
+        setModerationLogs(
+          snap.docs.map((d) => ({ id: d.id, ...d.data() }) as ModerationLogEntry)
+        );
+      },
+      (err) => console.error("AdminPanel logs error:", err)
+    );
+    return () => unsubLogs();
   }, []);
 
   const searchUser = async () => {
-    if (!targetId) return;
+    if (!targetId.trim()) return;
     try {
       let q;
       if (!isNaN(Number(targetId))) {
@@ -2796,7 +4849,6 @@ function AdminPanel({
           where("handle", "==", targetId.slice(1).toLowerCase()),
         );
       } else {
-        // Try handle first without @
         const q2 = query(
           collection(db, "users"),
           where("handle", "==", targetId.toLowerCase()),
@@ -2806,7 +4858,6 @@ function AdminPanel({
           setSelectedUser(snap2.docs[0].data() as UserProfile);
           return;
         }
-        // Fallback to displayName exact match
         q = query(
           collection(db, "users"),
           where("displayName", "==", targetId),
@@ -2820,56 +4871,74 @@ function AdminPanel({
         addNotification(t.noUsersFound, "error");
       }
     } catch (err) {
-      addNotification("Search error", "error");
+      addNotification("Ошибка поиска пользователя", "error");
     }
   };
 
-  const moderate = async (type: "ban" | "mute" | "unban" | "unmute") => {
+  const moderate = async (
+    type: "ban" | "mute" | "unban" | "unmute",
+    presetHours?: number,
+    presetLabel?: string
+  ) => {
     if (!selectedUser) return;
     if (selectedUser.role === "creator" || selectedUser.id === 1)
-      return addNotification("Нельзя наказывать создателя!", "error");
+      return addNotification("Нельзя наказывать создателя платформы!", "error");
 
     try {
-      const expiry = new Date();
-      expiry.setDate(expiry.getDate() + (parseInt(banDays) || 1));
+      let expiry: Date | null = null;
+      let durationText = "";
+
+      if (type === "ban" || type === "mute") {
+        const hours = presetHours !== undefined ? presetHours : (parseInt(banDays) || 1) * 24;
+        expiry = new Date();
+        expiry.setTime(expiry.getTime() + hours * 3600 * 1000);
+        durationText = presetLabel || (hours >= 24 * 365 ? "Навсегда" : `${hours} ч.`);
+      }
 
       let updates: any = {};
-
       if (type === "ban") {
-        updates = { isBanned: true, banReason, banExpires: expiry };
+        updates = { isBanned: true, banReason: banReason || "Нарушение правил", banExpires: expiry };
       } else if (type === "mute") {
-        updates = { isMuted: true, muteReason: banReason, muteExpires: expiry };
+        updates = { isMuted: true, muteReason: banReason || "Нарушение правил", muteExpires: expiry };
       } else if (type === "unban") {
         updates = { isBanned: false, banReason: null, banExpires: null };
+        durationText = "Разблокирован";
       } else if (type === "unmute") {
         updates = { isMuted: false, muteReason: null, muteExpires: null };
+        durationText = "Снят мут";
       }
 
       await updateDoc(doc(db, "users", selectedUser.uid), updates);
 
+      // Record to audit trail
+      try {
+        await addDoc(collection(db, "moderation_logs"), {
+          adminId: profile?.uid || "admin",
+          adminName: profile?.displayName || "Admin",
+          targetUserId: selectedUser.uid,
+          targetUserName: selectedUser.displayName || `ID ${selectedUser.id}`,
+          action: type,
+          reason: banReason || (type.startsWith("un") ? "Снятие ограничения" : "Нарушение правил"),
+          durationText: durationText || "Действие выполнено",
+          createdAt: serverTimestamp(),
+        });
+      } catch (logErr) {
+        console.warn("Could not write to moderation_logs:", logErr);
+      }
+
       const actionsMap = {
-        ban: "Бан выдан",
-        mute: "Мут выдан",
+        ban: "Бан успешно выдан",
+        mute: "Мут успешно выдан",
         unban: "Разбан выдан",
         unmute: "Размут выдан",
       };
       addNotification(
-        `${actionsMap[type as keyof typeof actionsMap]}: ${selectedUser.displayName}`,
+        `${actionsMap[type]}: ${selectedUser.displayName}`,
         "success",
       );
-
-      // Also send report to creator automatically if it's a ban
-      if ((type === "ban" || type === "mute") && profile?.uid) {
-        await addDoc(collection(db, "reports"), {
-          reporterId: profile.uid,
-          targetId: selectedUser.uid,
-          reason: `ADMIN ACTION (${type.toUpperCase()}): ${banReason}`,
-          status: "pending",
-          createdAt: serverTimestamp(),
-        });
-      }
     } catch (err) {
-      addNotification("Ошибка при выполнении действия", "error");
+      console.error(err);
+      addNotification("Ошибка при выполнении действия (проверьте права)", "error");
     }
   };
 
@@ -2887,6 +4956,11 @@ function AdminPanel({
     return () => unsub();
   }, []);
 
+  const totalUsers = users.length;
+  const bannedCount = users.filter((u) => u.isBanned).length;
+  const mutedCount = users.filter((u) => u.isMuted).length;
+  const onlineCount = users.filter((u) => isOnline(u.lastSeen)).length;
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -2897,165 +4971,282 @@ function AdminPanel({
       <motion.div
         initial={{ y: 50 }}
         animate={{ y: 0 }}
-        className={`w-full max-w-5xl h-[85vh] overflow-hidden flex flex-col rounded-[3rem] shadow-2xl border ${profile?.theme === "light" ? "bg-white border-slate-200" : "bg-[#0f172a] border-white/10"}`}
+        className={`w-full max-w-5xl h-[88vh] overflow-hidden flex flex-col rounded-[3rem] shadow-2xl border ${profile?.theme === "light" ? "bg-white border-slate-200" : "bg-[#0f172a] border-white/10"}`}
       >
-        <div className="p-8 border-b border-white/5 flex justify-between items-center shrink-0">
+        {/* Header */}
+        <div className="p-6 md:p-8 border-b border-white/5 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-4">
             <div className="bg-orange-500 p-3 rounded-2xl shadow-xl shadow-orange-500/20">
               <ShieldAlert className="w-8 h-8 text-white" />
             </div>
             <div>
-              <h2 className="text-4xl font-black italic tracking-tighter uppercase">
+              <h2 className="text-3xl md:text-4xl font-black italic tracking-tighter uppercase">
                 {t.adminTitle || "Админ Панель"}
               </h2>
-              <p className="text-orange-500 text-[10px] font-black uppercase tracking-[0.5em]">
-                Moderation Access
+              <p className="text-orange-500 text-[10px] font-black uppercase tracking-[0.4em]">
+                Система управления & Модерация
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-3 hover:bg-white/5 rounded-full"
+            className="p-3 hover:bg-white/10 rounded-full transition-colors"
           >
-            <X className="w-8 h-8" />
+            <X className="w-7 h-7" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-hidden grid grid-cols-2">
-          {/* Left: Moderation */}
-          <div className="p-8 border-r border-white/5 overflow-y-auto custom-scrollbar space-y-6">
-            <div
-              className={`p-6 rounded-3xl border ${profile?.theme === "light" ? "bg-slate-50 border-slate-200" : "bg-white/5 border-white/5"}`}
-            >
-              <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                <UserMinus className="w-5 h-5 text-red-500" /> {t.moderation}
-              </h3>
-              <div className="flex gap-2 mb-4">
-                <input
-                  value={targetId}
-                  onChange={(e) => setTargetId(e.target.value)}
-                  placeholder="ID / Nickname"
-                  className={`flex-1 rounded-xl px-4 text-sm outline-none focus:ring-1 ring-blue-500 ${profile?.theme === "light" ? "bg-white border border-slate-200 text-black" : "bg-black/20 border border-white/10 text-white"}`}
-                />
-                <button
-                  onClick={searchUser}
-                  className="bg-blue-600 text-white px-8 py-2 rounded-xl text-sm font-black uppercase tracking-widest"
-                >
-                  {t.find}
-                </button>
-              </div>
-              {selectedUser && (
-                <div
-                  className={`p-6 rounded-3xl mb-4 border ${profile?.theme === "light" ? "bg-gradient-to-br from-blue-100 to-purple-100 border-blue-200" : "bg-gradient-to-br from-blue-600/20 to-purple-600/20 border-white/10"}`}
-                >
-                  <div className="flex items-center gap-4 mb-4">
-                    <img
-                      src={selectedUser.photoURL}
-                      className={`w-16 h-16 rounded-2xl shadow-xl border ${profile?.theme === "light" ? "border-white" : "border-white/10"}`}
-                      alt=""
-                    />
-                    <div>
-                      <p className="font-black text-xl italic tracking-tighter">
-                        {selectedUser.displayName}
-                      </p>
-                      <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">
-                        User ID: {selectedUser.id}
-                      </p>
-                    </div>
-                  </div>
+        {/* Real-time Activity Statistics Counters Bar */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 px-6 py-3 border-b border-white/5 bg-black/20 shrink-0">
+          <div className="p-2.5 rounded-2xl bg-white/5 border border-white/5 flex flex-col">
+            <span className="text-[10px] uppercase font-black tracking-widest text-slate-400">
+              Пользователи
+            </span>
+            <span className="text-lg font-black text-white tabular-nums">
+              {totalUsers}
+            </span>
+          </div>
 
-                  <div className="space-y-3">
-                    <input
-                      value={banReason}
-                      onChange={(e) => setBanReason(e.target.value)}
-                      placeholder="Причина (для бана/мута)"
-                      className={`w-full rounded-2xl px-4 py-3 text-sm focus:ring-1 ring-blue-500 outline-none ${profile?.theme === "light" ? "bg-white border border-slate-200 text-black" : "bg-black/30 border border-white/5 text-white"}`}
-                    />
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        value={banDays}
-                        onChange={(e) => setBanDays(e.target.value)}
-                        placeholder="Дни"
-                        className={`w-20 rounded-2xl px-4 py-3 text-sm outline-none ${profile?.theme === "light" ? "bg-white border border-slate-200 text-black" : "bg-black/30 border border-white/5 text-white"}`}
+          <div className="p-2.5 rounded-2xl bg-green-500/10 border border-green-500/20 flex flex-col">
+            <span className="text-[10px] uppercase font-black tracking-widest text-green-400">
+              В сети
+            </span>
+            <span className="text-lg font-black text-green-300 tabular-nums">
+              {onlineCount}
+            </span>
+          </div>
+
+          <div className="p-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex flex-col">
+            <span className="text-[10px] uppercase font-black tracking-widest text-rose-400">
+              Активных банов
+            </span>
+            <span className="text-lg font-black text-rose-300 tabular-nums">
+              {bannedCount}
+            </span>
+          </div>
+
+          <div className="p-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex flex-col">
+            <span className="text-[10px] uppercase font-black tracking-widest text-amber-400">
+              Замучено
+            </span>
+            <span className="text-lg font-black text-amber-300 tabular-nums">
+              {mutedCount}
+            </span>
+          </div>
+
+          <div className="p-2.5 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex flex-col col-span-2 sm:col-span-1">
+            <span className="text-[10px] uppercase font-black tracking-widest text-blue-400">
+              Всего чатов
+            </span>
+            <span className="text-lg font-black text-blue-300 tabular-nums">
+              {chats.length}
+            </span>
+          </div>
+        </div>
+
+        {/* Tab Switcher */}
+        <div className="flex border-b border-white/5 px-6 pt-3 gap-2 shrink-0">
+          <button
+            onClick={() => setActiveTab("moderation")}
+            className={`py-2 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+              activeTab === "moderation"
+                ? "bg-blue-600 text-white shadow-lg shadow-blue-500/30"
+                : "text-slate-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            Управление & Быстрые пресеты
+          </button>
+          <button
+            onClick={() => setActiveTab("logs")}
+            className={`py-2 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+              activeTab === "logs"
+                ? "bg-blue-600 text-white shadow-lg shadow-blue-500/30"
+                : "text-slate-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <span>Лог аудита модерации</span>
+            <span className="bg-white/20 text-[10px] px-1.5 py-0.2 rounded-full">
+              {moderationLogs.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab("reports")}
+            className={`py-2 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+              activeTab === "reports"
+                ? "bg-orange-600 text-white shadow-lg shadow-orange-500/30"
+                : "text-slate-400 hover:text-white hover:bg-white/5"
+            }`}
+          >
+            <span>Жалобы</span>
+            <span className="bg-orange-500 text-white text-[10px] px-1.5 py-0.2 rounded-full">
+              {reports.length}
+            </span>
+          </button>
+        </div>
+
+        {/* Tab 1: Moderation & Presets */}
+        {activeTab === "moderation" && (
+          <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-2">
+            {/* Left: Moderation Panel */}
+            <div className="p-6 md:p-8 border-r border-white/5 overflow-y-auto custom-scrollbar space-y-6">
+              <div
+                className={`p-6 rounded-3xl border ${profile?.theme === "light" ? "bg-slate-50 border-slate-200" : "bg-white/5 border-white/5"}`}
+              >
+                <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+                  <UserMinus className="w-5 h-5 text-red-500" /> {t.moderation}
+                </h3>
+                <div className="flex gap-2 mb-4">
+                  <input
+                    value={targetId}
+                    onChange={(e) => setTargetId(e.target.value)}
+                    placeholder="ID, @handle или Имя"
+                    className={`flex-1 rounded-xl px-4 text-sm outline-none focus:ring-1 ring-blue-500 ${profile?.theme === "light" ? "bg-white border border-slate-200 text-black" : "bg-black/20 border border-white/10 text-white"}`}
+                  />
+                  <button
+                    onClick={searchUser}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all"
+                  >
+                    {t.find}
+                  </button>
+                </div>
+
+                {selectedUser && (
+                  <div
+                    className={`p-6 rounded-3xl mb-4 border ${profile?.theme === "light" ? "bg-gradient-to-br from-blue-100 to-purple-100 border-blue-200" : "bg-gradient-to-br from-blue-600/20 to-purple-600/20 border-white/10"}`}
+                  >
+                    <div className="flex items-center gap-4 mb-4">
+                      <img
+                        src={selectedUser.photoURL}
+                        className={`w-16 h-16 rounded-2xl shadow-xl border ${profile?.theme === "light" ? "border-white" : "border-white/10"}`}
+                        alt=""
                       />
-                      <div className="flex-1 grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="font-black text-xl italic tracking-tighter text-white">
+                          {selectedUser.displayName}
+                        </p>
+                        <p className="text-[10px] text-blue-400 font-bold uppercase tracking-widest">
+                          User ID: {selectedUser.id} · @{selectedUser.handle || "no_handle"}
+                        </p>
+                        {selectedUser.isBanned && (
+                          <span className="inline-block mt-1 text-[10px] bg-red-500/20 text-red-400 border border-red-500/30 px-2 py-0.5 rounded-full font-bold">
+                            ЗАБЛОКИРОВАН
+                          </span>
+                        )}
+                        {selectedUser.isMuted && (
+                          <span className="inline-block mt-1 ml-1 text-[10px] bg-orange-500/20 text-orange-400 border border-orange-500/30 px-2 py-0.5 rounded-full font-bold">
+                            ЗАМУЧЕН
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <input
+                        value={banReason}
+                        onChange={(e) => setBanReason(e.target.value)}
+                        placeholder="Причина (для бана / мута)"
+                        className={`w-full rounded-2xl px-4 py-3 text-sm focus:ring-1 ring-blue-500 outline-none ${profile?.theme === "light" ? "bg-white border border-slate-200 text-black" : "bg-black/30 border border-white/5 text-white"}`}
+                      />
+
+                      {/* Quick Presets for Ban & Mute */}
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block mb-1.5">
+                          Быстрые пресеты наказания:
+                        </span>
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => moderate("ban", 1, "1 час")}
+                            className="py-2 rounded-xl bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-500/30 text-[10px] font-black uppercase tracking-wider transition-all"
+                          >
+                            Бан 1 час
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moderate("ban", 24, "24 часа")}
+                            className="py-2 rounded-xl bg-red-600/30 hover:bg-red-600/50 text-red-300 border border-red-500/40 text-[10px] font-black uppercase tracking-wider transition-all"
+                          >
+                            Бан 1 день
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moderate("ban", 24 * 365 * 100, "Навсегда")}
+                            className="py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-[10px] font-black uppercase tracking-wider transition-all shadow-lg shadow-red-600/30"
+                          >
+                            Бан навсегда
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 mt-2">
+                          <button
+                            type="button"
+                            onClick={() => moderate("mute", 1, "1 час")}
+                            className="py-2 rounded-xl bg-orange-500/20 hover:bg-orange-500/40 text-orange-400 border border-orange-500/30 text-[10px] font-black uppercase tracking-wider transition-all"
+                          >
+                            Мут 1 час
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moderate("mute", 24, "24 часа")}
+                            className="py-2 rounded-xl bg-orange-500/30 hover:bg-orange-500/50 text-orange-300 border border-orange-500/40 text-[10px] font-black uppercase tracking-wider transition-all"
+                          >
+                            Мут 1 день
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => moderate("mute", 24 * 365 * 100, "Навсегда")}
+                            className="py-2 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-[10px] font-black uppercase tracking-wider transition-all shadow-lg shadow-orange-600/30"
+                          >
+                            Мут навсегда
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Manual days & unban / unmute */}
+                      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/5">
                         <button
-                          onClick={() => moderate("ban")}
-                          className="bg-red-600 text-white hover:bg-red-500 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                          onClick={() => moderate("unban")}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-emerald-500/20"
                         >
-                          Ban
+                          Разбанить
                         </button>
                         <button
-                          onClick={() => moderate("mute")}
-                          className="bg-orange-600 text-white hover:bg-orange-500 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                          onClick={() => moderate("unmute")}
+                          className="bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-500/20"
                         >
-                          Mute
+                          Размутить
                         </button>
                       </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2 mt-3">
-                      <button
-                        onClick={() => moderate("unban")}
-                        className="bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-emerald-500/20"
-                      >
-                        Unban
-                      </button>
-                      <button
-                        onClick={() => moderate("unmute")}
-                        className="bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-blue-500/20"
-                      >
-                        Unmute
-                      </button>
-                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-
-            <div
-              className={`p-6 rounded-3xl border ${profile?.theme === "light" ? "bg-slate-50 border-slate-200" : "bg-white/5 border-white/5"}`}
-            >
-              <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-blue-500 underline decoration-blue-500/20">
-                System Logs
-              </h3>
-              <div className="space-y-2 opacity-50">
-                {[
-                  { msg: "User #42 logged in", time: "12:44" },
-                  { msg: "Group 'Developers' created", time: "12:35" },
-                  { msg: "Global Broadcast sent by Admin", time: "12:10" },
-                ].map((log, i) => (
-                  <div
-                    key={i}
-                    className={`flex justify-between items-center text-[11px] p-2 rounded-lg font-mono ${profile?.theme === "light" ? "bg-slate-200" : "bg-black/20"}`}
-                  >
-                    <span className="text-green-500 font-bold mr-2">
-                      {log.time}
-                    </span>
-                    <span className="flex-1 truncate tracking-tight">
-                      {log.msg}
-                    </span>
-                  </div>
-                ))}
+                )}
               </div>
             </div>
 
-            <div
-              className={`p-6 rounded-3xl border ${profile?.theme === "light" ? "bg-slate-50 border-slate-200" : "bg-white/5 border-white/5"}`}
-            >
-              <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                Список пользователей
+            {/* Right: User Directory with Click-to-Moderate */}
+            <div className="p-6 md:p-8 overflow-y-auto custom-scrollbar space-y-4">
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                Список пользователей ({users.length})
               </h3>
-              <div className="space-y-2 max-h-[200px] overflow-y-auto custom-scrollbar">
+              <p className="text-xs text-slate-400">
+                Нажмите на пользователя для моментальной настройки наказаний:
+              </p>
+              <div className="space-y-2 max-h-[500px] overflow-y-auto custom-scrollbar">
                 {users.map((u, i) => (
                   <div
-                    key={i}
+                    key={`adm-user-${u.uid || i}`}
                     onClick={() => setSelectedUser(u)}
-                    className={`flex items-center gap-3 p-2 rounded-xl cursor-pointer transition-colors ${profile?.theme === "light" ? "hover:bg-slate-200" : "hover:bg-white/5"}`}
+                    className={`flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all border ${
+                      selectedUser?.uid === u.uid
+                        ? "bg-blue-600/20 border-blue-500/50"
+                        : profile?.theme === "light"
+                          ? "hover:bg-slate-200 border-slate-200"
+                          : "hover:bg-white/5 border-white/5"
+                    }`}
                   >
                     <img
                       src={u.photoURL}
-                      className="w-8 h-8 rounded-lg"
+                      className="w-10 h-10 rounded-xl object-cover shrink-0"
                       alt=""
                     />
                     <div className="flex-1 min-w-0">
@@ -3069,11 +5260,18 @@ function AdminPanel({
                           role={u.role}
                         />
                       </div>
-                      <p className="text-[10px] opacity-40">ID: {u.id}</p>
+                      <p className="text-[10px] opacity-50 font-mono">
+                        ID: {u.id} · {formatLastSeen(u.lastSeen)}
+                      </p>
                     </div>
                     {u.isBanned && (
-                      <span className="text-[10px] bg-red-500/20 text-red-500 px-2 py-0.5 rounded-full font-bold">
+                      <span className="text-[9px] bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full font-bold">
                         BANNED
+                      </span>
+                    )}
+                    {u.isMuted && (
+                      <span className="text-[9px] bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full font-bold">
+                        MUTED
                       </span>
                     )}
                   </div>
@@ -3081,25 +5279,88 @@ function AdminPanel({
               </div>
             </div>
           </div>
+        )}
 
-          {/* Right: Reports */}
-          <div className="p-8 flex flex-col overflow-hidden">
+        {/* Tab 2: Live Moderation Actions Log */}
+        {activeTab === "logs" && (
+          <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                Хронологический лог действий модерации
+              </h3>
+              <span className="text-xs text-slate-400">
+                Записей: {moderationLogs.length}
+              </span>
+            </div>
+
+            {moderationLogs.length === 0 ? (
+              <div className="h-64 flex flex-col items-center justify-center opacity-40">
+                <ShieldCheck className="w-16 h-16 mb-2" />
+                <p className="text-sm font-bold uppercase tracking-wider">
+                  Логов пока нет. Действия администраторов будут фиксироваться здесь в реальном времени.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {moderationLogs.map((log) => {
+                  const actionColor =
+                    log.action === "ban"
+                      ? "bg-red-500/20 text-red-400 border-red-500/30"
+                      : log.action === "mute"
+                        ? "bg-orange-500/20 text-orange-400 border-orange-500/30"
+                        : "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
+                  return (
+                    <div
+                      key={log.id}
+                      className="p-3.5 rounded-2xl bg-white/5 border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-full border ${actionColor}`}
+                        >
+                          {log.action}
+                        </span>
+                        <div>
+                          <p className="text-xs font-bold text-white">
+                            Модератор <span className="text-blue-400">{log.adminName}</span> → Пользователь{" "}
+                            <span className="text-amber-400">{log.targetUserName}</span>
+                          </p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Причина: {log.reason} · Срок: {log.durationText || "—"}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                        {log.createdAt?.toDate ? format(log.createdAt.toDate(), "dd.MM.yyyy HH:mm") : "Недавно"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab 3: Reports */}
+        {activeTab === "reports" && (
+          <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar">
             <h3 className="text-xl font-black uppercase italic mb-6 text-orange-500 flex items-center gap-3">
-              Жалобы от админов / Игроков
+              Жалобы от пользователей
               <span className="bg-orange-500 text-white px-2 py-0.5 rounded-full text-[10px]">
                 {reports.length}
               </span>
             </h3>
-            <div className="flex-1 overflow-y-auto space-y-4 custom-scrollbar">
-              {reports.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center opacity-20">
-                  <ShieldCheck className="w-16 h-16 mb-4" />
-                  <p className="text-sm font-black uppercase tracking-widest">
-                    Чисто
-                  </p>
-                </div>
-              ) : (
-                reports.map((r) => (
+
+            {reports.length === 0 ? (
+              <div className="h-64 flex flex-col items-center justify-center opacity-40">
+                <ShieldCheck className="w-16 h-16 mb-4" />
+                <p className="text-sm font-black uppercase tracking-widest">
+                  Все жалобы решены
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {reports.map((r) => (
                   <div
                     key={r.id}
                     className={`p-5 rounded-[2rem] border border-orange-500/20 ${profile?.theme === "light" ? "bg-orange-50" : "bg-orange-500/5"}`}
@@ -3121,12 +5382,17 @@ function AdminPanel({
                     </div>
                     <div className="grid grid-cols-2 gap-2 mt-4">
                       <button
-                        onClick={() =>
-                          addNotification("Действие в процессе...", "info")
-                        }
-                        className="py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black"
+                        onClick={async () => {
+                          try {
+                            await deleteDoc(doc(db, "reports", r.id));
+                            addNotification("Жалоба отмечена решенной", "success");
+                          } catch (e) {
+                            addNotification("Ошибка", "error");
+                          }
+                        }}
+                        className="py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all"
                       >
-                        Решить
+                        Решено (Закрыть)
                       </button>
                       <button
                         onClick={async () => {
@@ -3134,24 +5400,20 @@ function AdminPanel({
                             await deleteDoc(doc(db, "reports", r.id));
                             addNotification("Удалено", "success");
                           } catch (e) {
-                            console.error(e);
-                            addNotification(
-                              "Ошибка удаления (недостаточно прав)",
-                              "error",
-                            );
+                            addNotification("Ошибка удаления", "error");
                           }
                         }}
-                        className="py-2 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black"
+                        className="py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all"
                       >
                         Удалить
                       </button>
                     </div>
                   </div>
-                ))
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
-        </div>
+        )}
       </motion.div>
     </motion.div>
   );

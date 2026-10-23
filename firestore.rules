@@ -25,7 +25,7 @@ service cloud.firestore {
 
     function isCreator() {
       return isSignedIn() && (
-        request.auth.token.email == 'iluha1032020@gmail.com' ||
+        request.auth.token.email in ['iluha1032020@gmail.com', 'iluha032020@gmail.com'] ||
         (userExists(request.auth.uid) && 
          (getUserData(request.auth.uid).get('role', 'user') == 'creator' || getUserData(request.auth.uid).get('id', -1) == 1))
       );
@@ -40,17 +40,13 @@ service cloud.firestore {
     }
 
     function isBanned() {
-      return isSignedIn() && userExists(request.auth.uid) && 
+      return isSignedIn() && !isCreator() && userExists(request.auth.uid) && 
         getUserData(request.auth.uid).get('isBanned', false) == true;
     }
 
     function isMuted() {
-      return isSignedIn() && userExists(request.auth.uid) && 
+      return isSignedIn() && !isCreator() && userExists(request.auth.uid) && 
         getUserData(request.auth.uid).get('isMuted', false) == true;
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     // --- User Rules ---
@@ -59,10 +55,18 @@ service cloud.firestore {
       allow create: if isOwner(userId) && 
         request.resource.data.keys().hasAll(['uid', 'email', 'id', 'createdAt', 'handle']);
 
-      allow update: if (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'theme', 'language', 'handle', 'twoFactorEnabled', 'twoFactorSecret', 'lastSeen'])) ||
-         (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned', 'banReason', 'banExpires', 'isMuted', 'muteReason', 'muteExpires', 'isVerified', 'verificationCode'])) ||
-         (isCreator() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'isVerified', 'displayName', 'photoURL', 'bio', 'theme', 'language', 'handle', 'twoFactorEnabled', 'twoFactorSecret', 'lastSeen', 'isBanned', 'banReason', 'banExpires', 'isMuted', 'muteReason', 'muteExpires']));
-      allow delete: if isCreator();
+      // Creator has full unrestricted update permissions. Admins have moderation permissions. Owners can update their profile.
+      allow update: if isCreator() ||
+         (isOwner(userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio', 'theme', 'language', 'handle', 'twoFactorEnabled', 'twoFactorSecret', 'lastSeen', 'fontSize', 'bubbleStyle', 'soundEnabled'])) ||
+         (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isBanned', 'banReason', 'banExpires', 'isMuted', 'muteReason', 'muteExpires', 'isVerified', 'verificationCode', 'role', 'id']));
+      allow delete: if isCreator() || isOwner(userId);
+    }
+
+    // --- Moderation Logs ---
+    match /moderation_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update, delete: if isCreator();
     }
 
     // --- Report Rules ---
@@ -75,28 +79,39 @@ service cloud.firestore {
 
     // --- Chat Rules ---
     match /chats/{chatId} {
-      // Global chat can be seen by all to allow joining
       allow get: if isSignedIn() && (chatId == 'global_chat' || request.auth.uid in resource.data.memberIds || isAdmin());
       allow list: if isSignedIn() && (request.auth.uid in resource.data.memberIds || isAdmin());
       
       allow create: if isSignedIn();
       allow update: if isSignedIn() && (
-        (request.auth.uid in resource.data.memberIds) || isAdmin() ||
-        (chatId == 'global_chat' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds']))
-      ) && request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMessage', 'lastMessageAt', 'memberIds', 'name', 'avatarURL']);
+        isCreator() || isAdmin() || (chatId == 'global_chat') || (request.auth.uid in resource.data.memberIds)
+      );
+      allow delete: if isCreator() || isAdmin() || (isSignedIn() && resource.data.get('creatorId', '') == request.auth.uid);
     }
 
     // --- Message Rules ---
     match /chats/{chatId}/messages/{messageId} {
-      allow read: if isSignedIn() && (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds || isAdmin());
+      allow read: if isSignedIn() && (chatId == 'global_chat' || request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds || isAdmin());
       
-      allow create: if isSignedIn() && !isBanned() && !isMuted() &&
-        (request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds || isAdmin()) &&
-        (request.resource.data.senderId == request.auth.uid || request.resource.data.senderId == 'system');
+      allow create: if isSignedIn() && (
+        isCreator() || 
+        (!isBanned() && !isMuted() && (chatId == 'global_chat' || request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds || isAdmin()))
+      );
 
-      allow update: if isSignedIn() && !isBanned() &&
-        resource.data.senderId == request.auth.uid &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt']);
+      allow update: if isSignedIn() && (
+        isCreator() ||
+        (!isBanned() && (
+          // Message edit by sender
+          (resource.data.senderId == request.auth.uid &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt'])) ||
+          // Reaction toggle by chat member or in global_chat
+          ((chatId == 'global_chat' || request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds || isAdmin()) &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])) ||
+          // Pin/unpin by chat member or admin
+          ((chatId == 'global_chat' || request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.memberIds || isAdmin()) &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned', 'pinnedAt']))
+        ))
+      );
 
       allow delete: if isSignedIn() && (resource.data.senderId == request.auth.uid || isAdmin());
     }
@@ -104,7 +119,7 @@ service cloud.firestore {
     // --- System Config ---
     match /system/{configId} {
       allow read: if isSignedIn();
-      allow update: if isCreator() || (isSignedIn() && configId == 'config' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableIds', 'userSequence']));
+      allow update: if isCreator() || (isSignedIn() && configId == 'config' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableIds', 'userSequence', 'globalChatLock']));
       allow create: if isCreator() || (isSignedIn() && configId == 'config');
       allow delete: if isCreator();
     }

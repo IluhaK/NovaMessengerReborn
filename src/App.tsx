@@ -21,6 +21,7 @@ import Landing from "./components/Landing";
 import Auth from "./components/Auth";
 import Messenger from "./components/Messenger";
 import { motion, AnimatePresence } from "framer-motion";
+import { ShieldAlert, LogOut, Clock, AlertTriangle } from "lucide-react";
 
 interface AuthContextType {
   user: User | null;
@@ -248,29 +249,69 @@ function LoadingScreen() {
 }
 
 function BannedScreen({ reason, expires }: { reason?: string; expires?: any }) {
-  const dateStr = expires?.toDate?.()
-    ? expires.toDate().toLocaleString()
-    : "Permanently";
+  const isPermanent = !expires || !expires.toDate;
+  const dateStr = !isPermanent
+    ? expires.toDate().toLocaleString("ru-RU", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "Бессрочно (Навсегда)";
+
   return (
-    <div className="flex flex-col items-center justify-center h-screen bg-slate-900 text-white p-6 text-center">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-[#070b12] text-white p-6 text-center relative overflow-hidden select-none">
+      {/* Ambient background glow */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-rose-600/15 blur-[140px] rounded-full pointer-events-none" />
+
       <motion.div
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        className="text-64 mb-4"
+        initial={{ opacity: 0, y: 20, scale: 0.95 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.4 }}
+        className="w-full max-w-md bg-slate-900/80 border border-rose-500/30 backdrop-blur-2xl rounded-3xl p-8 shadow-2xl relative z-10"
       >
-        🚫
+        <div className="w-20 h-20 mx-auto mb-6 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shadow-lg shadow-rose-500/20">
+          <ShieldAlert className="w-10 h-10 text-rose-500" />
+        </div>
+
+        <h1 className="text-2xl font-black tracking-tight text-white mb-2">
+          Доступ к аккаунту ограничен
+        </h1>
+        <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+          Администрация мессенджера приостановила действие вашей учетной записи за нарушение правил сообщества.
+        </p>
+
+        <div className="space-y-3 mb-8 text-left">
+          <div className="p-4 rounded-2xl bg-black/30 border border-white/5">
+            <div className="flex items-center gap-2 text-rose-400 text-xs font-bold uppercase tracking-wider mb-1">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>Причина блокировки</span>
+            </div>
+            <p className="text-sm font-medium text-slate-200">
+              {reason || "Нарушение условий использования платформы"}
+            </p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-black/30 border border-white/5">
+            <div className="flex items-center gap-2 text-sky-400 text-xs font-bold uppercase tracking-wider mb-1">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Срок действия ограничения</span>
+            </div>
+            <p className="text-sm font-medium text-slate-200">
+              {dateStr}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={() => auth.signOut()}
+          className="w-full py-4 px-6 bg-rose-600/90 hover:bg-rose-500 text-white rounded-2xl font-bold text-sm tracking-wide transition-all shadow-xl shadow-rose-600/25 flex items-center justify-center gap-2.5 active:scale-98"
+        >
+          <LogOut className="w-4 h-4" />
+          <span>Выйти из аккаунта</span>
+        </button>
       </motion.div>
-      <h1 className="text-3xl font-bold mb-4">You have been suspended</h1>
-      <p className="text-lg opacity-80 mb-2">
-        Reason: {reason || "Violation of terms"}
-      </p>
-      <p className="text-lg opacity-80 mb-6">Expires: {dateStr}</p>
-      <button
-        onClick={() => auth.signOut()}
-        className="px-6 py-2 bg-red-600 rounded-full hover:bg-red-700 transition"
-      >
-        Logout
-      </button>
     </div>
   );
 }
